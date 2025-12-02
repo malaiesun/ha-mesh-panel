@@ -42,28 +42,42 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            if "add_device" in user_input:
+            if user_input["action"] == "add":
+                self.current_device_id = None
                 return await self.async_step_device()
-            if "edit_device" in user_input:
-                self.current_device_id = user_input["edit_device"]
+            
+            self.current_device_id = user_input["action"]
+            return await self.async_step_device_menu()
+
+        device_options = {"add": "Add a new device"}
+        for device in self.devices:
+            device_options[device[CONF_ID]] = device[CONF_NAME]
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Required("action"): SelectSelector(SelectSelectorConfig(options=list(device_options.keys()), custom_value=False, mode=SelectSelectorMode.DROPDOWN, translation_key=device_options)),
+            }),
+            last_step=False,
+        )
+
+    async def async_step_device_menu(self, user_input=None):
+        if user_input is not None:
+            if user_input["action"] == "edit":
                 return await self.async_step_device()
-            if "delete_device" in user_input:
-                device_id = user_input["delete_device"]
-                self.devices = [d for d in self.devices if d[CONF_ID] != device_id]
+            if user_input["action"] == "delete":
+                self.devices = [d for d in self.devices if d[CONF_ID] != self.current_device_id]
                 self.options[CONF_DEVICES] = self.devices
                 return self.async_create_entry(title="", data=self.options)
+            if user_input["action"] == "controls":
+                return await self.async_step_controls()
 
-        device_list = {d[CONF_ID]: d[CONF_NAME] for d in self.devices}
-
-        return self.async_show_menu(
-            step_id="init",
-            menu_options=["add_device", "edit_device", "delete_device"],
-            menu_options_dict={
-                "add_device": "Add a new device",
-                "edit_device": "Edit a device",
-                "delete_device": "Delete a device",
-            },
-            menu_options_dropdown_items=device_list,
+        return self.async_show_form(
+            step_id="device_menu",
+            data_schema=vol.Schema({
+                vol.Required("action"): SelectSelector(SelectSelectorConfig(options=["edit", "delete", "controls"], custom_value=False, mode=SelectSelectorMode.DROPDOWN, translation_key={"edit": "Edit Device", "delete": "Delete Device", "controls": "Manage Controls"})),
+            }),
+            last_step=False
         )
 
     async def async_step_device(self, user_input=None):
@@ -99,33 +113,45 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         controls = device_data.get(CONF_CONTROLS, [])
 
         if user_input is not None:
-            if "add_control" in user_input:
+            if user_input["action"] == "add":
                 self.current_control_id = None
                 return await self.async_step_control()
-            if "edit_control" in user_input:
-                self.current_control_id = user_input["edit_control"]
-                return await self.async_step_control()
-            if "delete_control" in user_input:
-                control_id = user_input["delete_control"]
-                device_data[CONF_CONTROLS] = [c for c in controls if c[CONF_ID] != control_id]
-                self.options[CONF_DEVICES] = self.devices
-                return await self.async_step_controls()
-            if "back" in user_input:
+            if user_input["action"] == "back":
                 self.current_device_id = None
                 return await self.async_step_init()
+            
+            self.current_control_id = user_input["action"]
+            return await self.async_step_control_menu()
 
-        control_list = {c[CONF_ID]: c[CONF_LABEL] for c in controls}
+        control_options = {"add": "Add a new control", "back": "Back to devices"}
+        for control in controls:
+            control_options[control[CONF_ID]] = control[CONF_LABEL]
 
-        return self.async_show_menu(
+        return self.async_show_form(
             step_id="controls",
-            menu_options=["add_control", "edit_control", "delete_control", "back"],
-            menu_options_dict={
-                "add_control": "Add a new control",
-                "edit_control": "Edit a control",
-                "delete_control": "Delete a control",
-                "back": "Back to devices",
-            },
-            menu_options_dropdown_items=control_list,
+            data_schema=vol.Schema({
+                vol.Required("action"): SelectSelector(SelectSelectorConfig(options=list(control_options.keys()), custom_value=False, mode=SelectSelectorMode.DROPDOWN, translation_key=control_options)),
+            }),
+            last_step=False,
+        )
+    
+    async def async_step_control_menu(self, user_input=None):
+        if user_input is not None:
+            if user_input["action"] == "edit":
+                return await self.async_step_control()
+            if user_input["action"] == "delete":
+                device_data = next((d for d in self.devices if d[CONF_ID] == self.current_device_id), {})
+                controls = device_data.get(CONF_CONTROLS, [])
+                device_data[CONF_CONTROLS] = [c for c in controls if c[CONF_ID] != self.current_control_id]
+                self.options[CONF_DEVICES] = self.devices
+                return await self.async_step_controls()
+
+        return self.async_show_form(
+            step_id="control_menu",
+            data_schema=vol.Schema({
+                vol.Required("action"): SelectSelector(SelectSelectorConfig(options=["edit", "delete"], custom_value=False, mode=SelectSelectorMode.DROPDOWN, translation_key={"edit": "Edit Control", "delete": "Delete Control"})),
+            }),
+            last_step=False,
         )
 
     async def async_step_control(self, user_input=None):
