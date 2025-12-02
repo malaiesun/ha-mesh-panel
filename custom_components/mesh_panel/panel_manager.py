@@ -3,8 +3,11 @@ import logging
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.components import mqtt
 from homeassistant.const import (
-    SERVICE_TURN_ON, SERVICE_TURN_OFF, ATTR_ENTITY_ID, ATTR_BRIGHTNESS, ATTR_RGB_COLOR
+    SERVICE_TURN_ON, SERVICE_TURN_OFF, ATTR_ENTITY_ID
 )
+# --- FIX: Import light attributes from the light component, not const ---
+from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
+
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
@@ -151,11 +154,11 @@ class MeshPanelController:
         payload = {"entity": entity_id, "state": s.state}
         
         # Enriched data for sliders/colors
-        if "brightness" in attrs:
-            payload["value"] = attrs["brightness"]
+        if ATTR_BRIGHTNESS in attrs:
+            payload["value"] = attrs[ATTR_BRIGHTNESS]
         if "volume_level" in attrs:
             payload["value"] = int(attrs["volume_level"] * 100)
-        if "rgb_color" in attrs:
-            payload["rgb_color"] = attrs["rgb_color"]
+        if ATTR_RGB_COLOR in attrs:
+            payload["rgb_color"] = attrs[ATTR_RGB_COLOR]
 
         await mqtt.async_publish(self.hass, self.topic_state, json.dumps(payload))
