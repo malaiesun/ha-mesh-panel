@@ -1,74 +1,71 @@
-import json
 import logging
-import yaml
-from homeassistant.core import HomeAssistant, callback
+import json
+import asyncio
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 from homeassistant.components import mqtt
 
-from .const import (
-    DOMAIN, CONF_PANEL_ID, CONF_MANUAL_CONFIG,
-    TOPIC_ANNOUNCE
-)
-from .panel_manager import MeshPanelController
+from .const import DOMAIN
+from .panel_manager import MeshPanelManager
 
 _LOGGER = logging.getLogger(__name__)
 
-async def async_setup(hass: HomeAssistant, config):
-    # Subscribe for auto-discovery announces
-    async def _announce(msg):
+async def async_setup(hass: HomeAssistant, config: dict):
+    """Set up the Mesh Panel component."""
+    hass.data.setdefault(DOMAIN, {})
+    return True
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Set up Mesh Panel from a config entry."""
+    manager = MeshPanelManager(hass, entry)
+    hass.data[DOMAIN][entry.entry_id] = manager
+    
+    await manager.async_setup()
+    
+    # Listen for config updates (when user changes YAML layout)
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+    
+    return True
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Unload a config entry."""
+    manager = hass.data[DOMAIN].pop(entry.entry_id)
+    await manager.async_unload()
+    return True
+
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+# ================= AUTO DISCOVERY LOGIC =================
+async def async_setup_discovery(hass: HomeAssistant):
+    """Listen for discovery messages."""
+    
+    async def message_received(msg):
         try:
-            data = json.loads(msg.payload or "{}")
-            panel_id = data.get("panel_id")
+            payload = json.loads(msg.payload)
+            panel_id = payload.get("panel_id")
             if not panel_id:
                 return
+            
+            # Check if already exists
+            current_entries = hass.config_entries.async_entries(DOMAIN)
+            for entry in current_entries:
+                if entry.unique_id == panel_id:
+                    return # Already configured
 
-            # Skip if already configured
-            for e in hass.config_entries.async_entries(DOMAIN):
-                if e.data.get(CONF_PANEL_ID) == panel_id:
-                    return
-
-            # Start discovery flow
+            # Trigger Config Flow
             await hass.config_entries.flow.async_init(
                 DOMAIN,
                 context={"source": "discovery"},
-                data={CONF_PANEL_ID: panel_id},
+                data={"panel_id": panel_id, "ip": payload.get("ip")}
             )
-            _LOGGER.info("Discovered MESH Panel via MQTT: %s", panel_id)
-
         except Exception as e:
-            _LOGGER.warning("Bad smartpanel/announce payload: %s", e)
+            _LOGGER.error(f"Error processing discovery: {e}")
 
-    await mqtt.async_subscribe(hass, TOPIC_ANNOUNCE, _announce)
+    await mqtt.async_subscribe(hass, "smartpanel/announce", message_received)
+
+# Hook discovery start into Home Assistant startup
+async def async_setup_global_discovery(hass, config):
+    await async_setup_discovery(hass)
     return True
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    panel_id = entry.data[CONF_PANEL_ID]
-    manual_yaml = entry.options.get(CONF_MANUAL_CONFIG, "") or ""
-    devices_data = []
-    if manual_yaml.strip():
-        try:
-            devices_data = yaml.safe_load(manual_yaml) or []
-        except Exception as e:
-            _LOGGER.error("Invalid YAML in options: %s", e)
-
-    ctrl = MeshPanelController(hass, panel_id, devices_data)
-    await ctrl.start()
-
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ctrl
-
-    async def _options_updated(_entry: ConfigEntry):
-        await async_reload_entry(hass, _entry)
-
-    entry.async_on_unload(entry.add_update_listener(_options_updated))
-    return True
-
-
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
-    # Nothing persistent to unload beyond unsubscribes handled by panel manager
-    hass.data[DOMAIN].pop(entry.entry_id, None)
-    return True
-
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry):
-    await hass.config_entries.async_reload(entry.entry_id)

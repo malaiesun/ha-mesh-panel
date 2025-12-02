@@ -1,11 +1,25 @@
+"""Constants for the Mesh Panel integration."""
+
 DOMAIN = "mesh_panel"
-
 CONF_PANEL_ID = "panel_id"
-CONF_MANUAL_CONFIG = "manual_config"  # YAML string in options
+CONF_LAYOUT = "layout_config"
 
-TOPIC_ANNOUNCE = "smartpanel/announce"
-TOPIC_BASE_FMT = "smartpanel/{panel_id}"
-TOPIC_UI_FMT = "smartpanel/{panel_id}/ui"
-TOPIC_STATE_FMT = "smartpanel/{panel_id}/state"
-TOPIC_ACTION_FMT = "smartpanel/{panel_id}/action"
-TOPIC_NOTIFY_FMT = "smartpanel/{panel_id}/notify"
+# Default layout to populate the options flow so the user has an example
+DEFAULT_LAYOUT = """
+devices:
+  - name: "Living Room"
+    icon: "sofa"
+    state_entity: "sensor.living_room_temperature"
+    controls:
+      - label: "Main Light"
+        type: "switch"
+        entity: "light.living_room_main"
+      - label: "Brightness"
+        type: "slider"
+        entity: "light.living_room_main"
+        min: 0
+        max: 255
+      - label: "Color"
+        type: "color"
+        entity: "light.living_room_main"
+"""
