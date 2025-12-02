@@ -1,11 +1,15 @@
 import json
 import logging
+import yaml
+
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.components import mqtt
 from homeassistant.const import (
-    SERVICE_TURN_ON, SERVICE_TURN_OFF, ATTR_ENTITY_ID
+    SERVICE_TURN_ON, 
+    SERVICE_TURN_OFF, 
+    ATTR_ENTITY_ID
 )
-# --- FIX: Import light attributes from the light component, not const ---
+# --- FIX: New Import Location for Light attributes ---
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
 
 from homeassistant.helpers.event import async_track_state_change_event
