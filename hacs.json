@@ -1,0 +1,8 @@
+{
+  "name": "ESP32 Smart Panel Controller",
+  "content_in_root": false,
+  "zip_release": false,
+  "filename": "smart_panel.zip",
+  "render_readme": true,
+  "homeassistant": "2023.1.0"
+}
