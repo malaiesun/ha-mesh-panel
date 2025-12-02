@@ -3,181 +3,175 @@ import json
 import yaml
 from homeassistant.core import HomeAssistant, callback, Context
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.typing import StateType
 from homeassistant.components import mqtt
-
-# --- FIXED IMPORTS BELOW ---
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
 from homeassistant.const import (
-    SERVICE_TURN_ON, 
-    SERVICE_TURN_OFF, 
-    STATE_ON, 
-    STATE_OFF, 
-    ATTR_ENTITY_ID
+    SERVICE_TURN_ON,
+    SERVICE_TURN_OFF,
+    ATTR_ENTITY_ID,
 )
-# ---------------------------
 
 from .const import CONF_PANEL_ID, CONF_LAYOUT, DEFAULT_LAYOUT
 
 _LOGGER = logging.getLogger(__name__)
+
+def _coerce_layout(layout_str: str) -> dict:
+    """Accept JSON or YAML, return dict with {'devices': [...]}."""
+    if not layout_str or not layout_str.strip():
+        layout_str = DEFAULT_LAYOUT
+    try:
+        # Try JSON first
+        data = json.loads(layout_str)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    try:
+        data = yaml.safe_load(layout_str)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {"devices": []}
 
 class MeshPanelManager:
     def __init__(self, hass: HomeAssistant, entry):
         self.hass = hass
         self.entry = entry
         self.panel_id = entry.data[CONF_PANEL_ID]
-        self.layout_yaml = entry.options.get(CONF_LAYOUT, DEFAULT_LAYOUT)
+        self.layout_raw = entry.options.get(CONF_LAYOUT, DEFAULT_LAYOUT)
         self.entities_to_watch = set()
-        self.remove_listeners = []
-        self.mqtt_sub = None
+        self._unsub = []
+        self._mqtt_unsub = None
 
     async def async_setup(self):
-        """Initialize connection and listeners."""
-        _LOGGER.info(f"Setting up Mesh Panel: {self.panel_id}")
-        
-        # 1. Parse Config and Extract Entities
-        try:
-            config_data = yaml.safe_load(self.layout_yaml)
-            self._parse_entities(config_data)
-        except Exception as e:
-            _LOGGER.error(f"Failed to parse layout YAML: {e}")
-            return
+        cfg = _coerce_layout(self.layout_raw)
+        devices = cfg.get("devices", [])
 
-        # 2. Subscribe to Panel Actions (MQTT)
+        # collect entities to watch
+        self.entities_to_watch.clear()
+        for dev in devices:
+            se = dev.get("state_entity")
+            if se:
+                self.entities_to_watch.add(se)
+            for c in dev.get("controls", []):
+                ent = c.get("entity")
+                if ent:
+                    self.entities_to_watch.add(ent)
+
+        # subscribe to actions
         topic = f"smartpanel/{self.panel_id}/action"
-        self.mqtt_sub = await mqtt.async_subscribe(
-            self.hass, topic, self._handle_mqtt_action
-        )
+        self._mqtt_unsub = await mqtt.async_subscribe(self.hass, topic, self._handle_action)
 
-        # 3. Listen to HA State Changes
+        # listen entity state changes
         if self.entities_to_watch:
-            self.remove_listeners.append(
+            self._unsub.append(
                 async_track_state_change_event(
-                    self.hass, list(self.entities_to_watch), self._handle_ha_state_change
+                    self.hass, list(self.entities_to_watch), self._handle_state_event
                 )
             )
 
-        # 4. Push initial UI Configuration to Panel
-        await self._send_ui_config(config_data)
+        # publish UI (retain)
+        await mqtt.async_publish(self.hass, f"smartpanel/{self.panel_id}/ui", json.dumps(cfg), retain=True)
 
-        # 5. Push initial states of all entities
-        for entity_id in self.entities_to_watch:
-            state = self.hass.states.get(entity_id)
-            if state:
-                await self._push_state_update(entity_id, state)
+        # push current state for all entities
+        for ent in self.entities_to_watch:
+            s = self.hass.states.get(ent)
+            if s:
+                await self._push_state(ent, s.state, s.attributes)
 
     async def async_unload(self):
-        """Clean up."""
-        if self.mqtt_sub:
-            self.mqtt_sub() # Unsubscribe MQTT
-        for remove in self.remove_listeners:
-            remove()
-
-    def _parse_entities(self, config_data):
-        """Extract all entity_ids from the config to watch them."""
-        devices = config_data.get("devices", [])
-        for dev in devices:
-            if "state_entity" in dev:
-                self.entities_to_watch.add(dev["state_entity"])
-            for ctrl in dev.get("controls", []):
-                if "entity" in ctrl:
-                    self.entities_to_watch.add(ctrl["entity"])
-
-    async def _send_ui_config(self, config_data):
-        """Send the JSON UI definition to the panel."""
-        topic = f"smartpanel/{self.panel_id}/ui"
-        payload = json.dumps(config_data)
-        await mqtt.async_publish(self.hass, topic, payload, retain=True)
-
-    async def _handle_mqtt_action(self, msg):
-        """Handle incoming actions from the panel."""
-        try:
-            payload = json.loads(msg.payload)
-            entity_id = payload.get("id")
-            
-            if not entity_id:
-                return
-
-            domain = entity_id.split(".")[0]
-            service_data = {ATTR_ENTITY_ID: entity_id}
-            service = None
-
-            # === LOGIC MAPPING C++ PAYLOAD TO HA SERVICE ===
-            
-            # Case 1: Switch/Toggle ("state": "on" or "off")
-            if "state" in payload:
-                if payload["state"] == "on":
-                    service = SERVICE_TURN_ON
-                else:
-                    service = SERVICE_TURN_OFF
-            
-            # Case 2: Slider Value ("value": 123)
-            elif "value" in payload:
-                val = int(payload["value"])
-                if domain == "light":
-                    service = SERVICE_TURN_ON
-                    service_data[ATTR_BRIGHTNESS] = val
-                elif domain == "cover":
-                    service = "set_cover_position"
-                    service_data["position"] = val
-                elif domain == "number" or domain == "input_number":
-                    service = "set_value"
-                    service_data["value"] = val
-                elif domain == "fan":
-                    service = SERVICE_TURN_ON
-                    service_data["percentage"] = val
-
-            # Case 3: RGB Color ("rgb_color": [255, 0, 0])
-            elif "rgb_color" in payload:
-                if domain == "light":
-                    service = SERVICE_TURN_ON
-                    service_data[ATTR_RGB_COLOR] = payload["rgb_color"]
-
-            # Case 4: Dropdown/Select ("option": "Mode A")
-            elif "option" in payload:
-                if domain == "input_select" or domain == "select":
-                    service = "select_option"
-                    service_data["option"] = payload["option"]
-
-            # Execute
-            if service:
-                await self.hass.services.async_call(
-                    domain, service, service_data, context=Context()
-                )
-
-        except Exception as e:
-            _LOGGER.error(f"Error handling MQTT action: {e}")
-
-    @callback
-    async def _handle_ha_state_change(self, event):
-        """When an HA entity changes, update the panel."""
-        entity_id = event.data["entity_id"]
-        new_state = event.data.get("new_state")
-        if new_state:
-            await self._push_state_update(entity_id, new_state)
-
-    async def _push_state_update(self, entity_id, state_obj):
-        """Format HA state to Panel JSON protocol."""
-        topic = f"smartpanel/{self.panel_id}/state"
-        
-        # Base payload
-        payload = {
-            "entity": entity_id,
-            "state": state_obj.state
-        }
-
-        # Add Brightness / Value
-        if ATTR_BRIGHTNESS in state_obj.attributes:
-            payload["value"] = state_obj.attributes[ATTR_BRIGHTNESS]
-        elif "current_position" in state_obj.attributes:
-             payload["value"] = state_obj.attributes["current_position"]
-        elif state_obj.domain in ["number", "input_number", "sensor"]:
+        if self._mqtt_unsub:
+            self._mqtt_unsub()
+        for u in self._unsub:
             try:
-                payload["value"] = float(state_obj.state)
-            except:
+                u()
+            except Exception:
+                pass
+        self._unsub.clear()
+
+    # ---------- inbound actions from panel ----------
+    async def _handle_action(self, msg):
+        try:
+            data = json.loads(msg.payload or "{}")
+        except Exception:
+            return
+
+        entity_id = data.get("id")
+        if not entity_id:
+            return
+
+        domain = entity_id.split(".", 1)[0]
+        service = None
+        service_data = {ATTR_ENTITY_ID: entity_id}
+
+        if "state" in data:
+            service = SERVICE_TURN_ON if str(data["state"]).lower() == "on" else SERVICE_TURN_OFF
+
+        elif "value" in data:
+            val = int(data["value"])
+            if domain == "light":
+                service = SERVICE_TURN_ON
+                service_data[ATTR_BRIGHTNESS] = val
+            elif domain == "fan":
+                # Prefer percentage/oscillation if available, fall back to turn_on
+                service = SERVICE_TURN_ON
+                service_data["percentage"] = val
+            elif domain == "cover":
+                service = "set_cover_position"
+                service_data["position"] = val
+            elif domain in ("number", "input_number"):
+                service = "set_value"
+                service_data["value"] = val
+            elif domain == "media_player":
+                service = "volume_set"
+                service_data["volume_level"] = val / 100.0
+
+        elif "rgb_color" in data:
+            if domain == "light":
+                service = SERVICE_TURN_ON
+                service_data[ATTR_RGB_COLOR] = data["rgb_color"]
+
+        elif "option" in data:
+            if domain in ("select", "input_select"):
+                service = "select_option"
+                service_data["option"] = data["option"]
+            elif domain == "media_player":
+                service = "select_source"
+                service_data = {"entity_id": entity_id, "source": data["option"]}
+
+        if service:
+            await self.hass.services.async_call(domain, service, service_data, blocking=False, context=Context())
+
+    # ---------- push updates to panel ----------
+    @callback
+    async def _handle_state_event(self, event):
+        s = event.data.get("new_state")
+        if not s:
+            return
+        await self._push_state(event.data["entity_id"], s.state, s.attributes)
+
+    async def _push_state(self, entity_id: str, state: StateType, attrs: dict):
+        topic = f"smartpanel/{self.panel_id}/state"
+        payload = {"entity": entity_id, "state": state}
+
+        if ATTR_BRIGHTNESS in attrs:
+            payload["value"] = int(attrs[ATTR_BRIGHTNESS])
+        elif "current_position" in attrs:
+            payload["value"] = int(attrs["current_position"])
+        elif "volume_level" in attrs:
+            try:
+                payload["value"] = int(float(attrs["volume_level"]) * 100)
+            except Exception:
                 pass
 
-        # Add Color
-        if ATTR_RGB_COLOR in state_obj.attributes:
-            payload["rgb_color"] = state_obj.attributes[ATTR_RGB_COLOR]
+        # color
+        if ATTR_RGB_COLOR in attrs:
+            try:
+                r, g, b = attrs[ATTR_RGB_COLOR]
+                payload["rgb_color"] = [int(r), int(g), int(b)]
+            except Exception:
+                pass
 
         await mqtt.async_publish(self.hass, topic, json.dumps(payload))
