@@ -9,7 +9,6 @@ from homeassistant.const import (
     SERVICE_TURN_OFF, 
     ATTR_ENTITY_ID
 )
-# --- FIX: New Import Location for Light attributes ---
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
 
 from homeassistant.helpers.event import async_track_state_change_event
@@ -26,66 +25,30 @@ class MeshPanelController:
     def __init__(self, hass: HomeAssistant, panel_id: str, devices_data: list):
         self.hass = hass
         self.panel_id = panel_id
-        # Topic Setup
         self.topic_ui = TOPIC_UI_FMT.format(panel_id=panel_id)
         self.topic_state = TOPIC_STATE_FMT.format(panel_id=panel_id)
         self.topic_action = TOPIC_ACTION_FMT.format(panel_id=panel_id)
         self.topic_notify = TOPIC_NOTIFY_FMT.format(panel_id=panel_id)
         
-        # Convert Options Flow format to C++ Format
-        self.devices_config = self._convert_to_cpp_format(devices_data)
+        self.devices_config = devices_data
         
         self._unsub_action = None
         self._state_unsub = None
         self._watched = set()
 
-    def _convert_to_cpp_format(self, raw_devices):
-        """
-        Transforms the flat list from Options Flow into the nested structure 
-        the C++ Firmware expects.
-        """
-        final_list = []
-        for d in raw_devices:
-            # We treat every item as a Device with 1 Control for simplicity in the UI
-            device_obj = {
-                "name": d.get("name", "Unknown"),
-                "icon": d.get("icon", ""),
-                "state_entity": d.get("entity", ""),
-                "controls": [
-                    {
-                        "label": d.get("name"), # Use Device name as label
-                        "type": d.get("type"),
-                        "entity": d.get("entity"),
-                        "min": d.get("min", 0),
-                        "max": d.get("max", 100),
-                        "step": 1,
-                        "options": "" # Dropdown options not implemented in simplified UI yet
-                    }
-                ]
-            }
-            final_list.append(device_obj)
-        return final_list
-
     async def start(self):
-        # 1. Subscribe to actions (Touch on Screen)
         async def _on_action(msg):
             await self._handle_action(msg.payload)
 
         self._unsub_action = await mqtt.async_subscribe(self.hass, self.topic_action, _on_action)
 
-        # 2. Watch entities for State Changes (Push Updates)
         self._collect_watched_entities()
         if self._watched:
-            # THIS IS THE "INSTANT UPDATE" MECHANISM
-            # Home Assistant triggers this callback immediately when state changes
             self._state_unsub = async_track_state_change_event(
                 self.hass, list(self._watched), self._handle_state_event
             )
 
-        # 3. Publish Layout to Screen
         await self.publish_ui()
-
-        # 4. Register Notify Service
         await self._register_services()
 
     async def publish_ui(self):
@@ -97,6 +60,9 @@ class MeshPanelController:
         for dev in self.devices_config:
             if dev.get("state_entity"):
                 self._watched.add(dev["state_entity"])
+            for control in dev.get("controls", []):
+                if control.get("entity"):
+                    self._watched.add(control["entity"])
 
     async def _register_services(self):
         async def _notify(call):
@@ -112,7 +78,6 @@ class MeshPanelController:
             self.hass.services.async_register("mesh_panel", svc_name, _notify)
 
     async def _handle_action(self, payload: str):
-        """Handle incoming MQTT messages from the Panel (Touch events)"""
         try:
             data = json.loads(payload or "{}")
             entity_id = data.get("id")
@@ -144,20 +109,14 @@ class MeshPanelController:
 
     @callback
     async def _handle_state_event(self, event):
-        """
-        Triggered INSTANTLY when a device state changes in Home Assistant.
-        This sends the update to the panel immediately.
-        """
         s = event.data.get("new_state")
         if not s: return
 
         entity_id = event.data["entity_id"]
         attrs = s.attributes
         
-        # Prepare payload
         payload = {"entity": entity_id, "state": s.state}
         
-        # Enriched data for sliders/colors
         if ATTR_BRIGHTNESS in attrs:
             payload["value"] = attrs[ATTR_BRIGHTNESS]
         if "volume_level" in attrs:

@@ -1,6 +1,7 @@
 import uuid
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     TextSelector,
     SelectSelector, SelectSelectorConfig, SelectSelectorMode,
@@ -12,13 +13,19 @@ from .const import DOMAIN, CONF_DEVICES
 
 CONF_NAME = "name"
 CONF_ICON = "icon"
-CONF_ENTITY = "entity"
-CONF_TYPE = "type"
-CONF_MIN = "min"
-CONF_MAX = "max"
+CONF_CONTROLS = "controls"
 CONF_ID = "id"
 
-DEVICE_TYPES = [
+CONF_LABEL = "label"
+CONF_TYPE = "type"
+CONF_ENTITY = "entity"
+CONF_MIN = "min"
+CONF_MAX = "max"
+CONF_STEP = "step"
+CONF_OPTIONS = "options"
+
+
+CONTROL_TYPES = [
     {"value": "switch", "label": "Switch (On/Off)"},
     {"value": "slider", "label": "Slider (Brightness/Volume)"},
     {"value": "color", "label": "Color Wheel"},
@@ -30,93 +37,135 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         self.config_entry = config_entry
         self.options = dict(config_entry.options)
         self.devices = self.options.get(CONF_DEVICES, [])
+        self.current_device_id = None
+        self.current_control_id = None
 
     async def async_step_init(self, user_input=None):
-        """Manage the options."""
-        return await self.async_step_menu()
-
-    async def async_step_menu(self, user_input=None):
-        """Show the main menu."""
         if user_input is not None:
-            if user_input["menu"] == "add":
-                return await self.async_step_edit()
-            else:
-                # user_input["menu"] contains the ID of the device to edit
-                return await self.async_step_edit(None, user_input["menu"])
-
-        options = {"add": "➕ Add New Device"}
-        for dev in self.devices:
-            options[dev[CONF_ID]] = f"{dev.get(CONF_ICON, '')} {dev[CONF_NAME]}"
-
-        return self.async_show_form(
-            step_id="menu",
-            data_schema=vol.Schema({
-                vol.Required("menu"): vol.In(options)
-            })
-        )
-
-    async def async_step_edit(self, user_input=None, device_id=None):
-        """Edit or Add a device."""
-        errors = {}
-        
-        # Find existing device if editing
-        existing = {}
-        if device_id:
-            for d in self.devices:
-                if d[CONF_ID] == device_id:
-                    existing = d
-                    break
-
-        if user_input is not None:
-            # Check if Delete was pressed
-            if user_input.get("delete", False):
-                self.devices = [d for d in self.devices if d[CONF_ID] != existing.get(CONF_ID)]
+            if "add_device" in user_input:
+                return await self.async_step_device()
+            if "edit_device" in user_input:
+                self.current_device_id = user_input["edit_device"]
+                return await self.async_step_device()
+            if "delete_device" in user_input:
+                device_id = user_input["delete_device"]
+                self.devices = [d for d in self.devices if d[CONF_ID] != device_id]
                 self.options[CONF_DEVICES] = self.devices
                 return self.async_create_entry(title="", data=self.options)
 
-            # Save Logic
-            new_device = {
-                CONF_ID: existing.get(CONF_ID, str(uuid.uuid4())),
-                CONF_NAME: user_input[CONF_NAME],
-                CONF_ICON: user_input[CONF_ICON],
-                CONF_ENTITY: user_input[CONF_ENTITY],
-                CONF_TYPE: user_input[CONF_TYPE],
-                CONF_MIN: user_input.get(CONF_MIN, 0),
-                CONF_MAX: user_input.get(CONF_MAX, 100),
-            }
+        device_list = {d[CONF_ID]: d[CONF_NAME] for d in self.devices}
 
-            if device_id:
-                # Update existing
-                for i, d in enumerate(self.devices):
-                    if d[CONF_ID] == device_id:
-                        self.devices[i] = new_device
-                        break
-            else:
-                # Add new
-                self.devices.append(new_device)
-
-            self.options[CONF_DEVICES] = self.devices
-            return self.async_create_entry(title="", data=self.options)
-
-        # Build Form
-        schema = vol.Schema({
-            vol.Required(CONF_NAME, default=existing.get(CONF_NAME, "")): TextSelector(),
-            vol.Required(CONF_ICON, default=existing.get(CONF_ICON, "mdi:power")): IconSelector(),
-            vol.Required(CONF_ENTITY, default=existing.get(CONF_ENTITY, "")): EntitySelector(EntitySelectorConfig()),
-            vol.Required(CONF_TYPE, default=existing.get(CONF_TYPE, "switch")): SelectSelector(
-                SelectSelectorConfig(options=DEVICE_TYPES, mode=SelectSelectorMode.DROPDOWN)
-            ),
-            vol.Optional(CONF_MIN, default=existing.get(CONF_MIN, 0)): NumberSelector(NumberSelectorConfig(min=0, max=1000)),
-            vol.Optional(CONF_MAX, default=existing.get(CONF_MAX, 100)): NumberSelector(NumberSelectorConfig(min=0, max=1000)),
-            vol.Optional("delete", default=False): bool,
-        })
-
-        return self.async_show_form(
-            step_id="edit",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={"device": existing.get(CONF_NAME, "New Device")}
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["add_device", "edit_device", "delete_device"],
+            menu_options_dict={
+                "add_device": "Add a new device",
+                "edit_device": "Edit a device",
+                "delete_device": "Delete a device",
+            },
+            menu_options_dropdown_items=device_list,
         )
 
-async def async_get_options_flow(config_entry):
-    return MeshPanelOptionsFlowHandler(config_entry)
+    async def async_step_device(self, user_input=None):
+        errors = {}
+        device_data = {}
+        if self.current_device_id:
+            device_data = next((d for d in self.devices if d[CONF_ID] == self.current_device_id), {})
+
+        if user_input is not None:
+            device_data[CONF_NAME] = user_input[CONF_NAME]
+            device_data[CONF_ICON] = user_input[CONF_ICON]
+            if not self.current_device_id:
+                device_data[CONF_ID] = str(uuid.uuid4())
+                device_data[CONF_CONTROLS] = []
+                self.devices.append(device_data)
+            
+            self.options[CONF_DEVICES] = self.devices
+            self.current_device_id = device_data[CONF_ID]
+            return await self.async_step_controls()
+
+        return self.async_show_form(
+            step_id="device",
+            data_schema=vol.Schema({
+                vol.Required(CONF_NAME, default=device_data.get(CONF_NAME, "")): TextSelector(),
+                vol.Required(CONF_ICON, default=device_data.get(CONF_ICON, "mdi:power")): IconSelector(),
+            }),
+            errors=errors,
+            last_step=False,
+        )
+
+    async def async_step_controls(self, user_input=None):
+        device_data = next((d for d in self.devices if d[CONF_ID] == self.current_device_id), {})
+        controls = device_data.get(CONF_CONTROLS, [])
+
+        if user_input is not None:
+            if "add_control" in user_input:
+                self.current_control_id = None
+                return await self.async_step_control()
+            if "edit_control" in user_input:
+                self.current_control_id = user_input["edit_control"]
+                return await self.async_step_control()
+            if "delete_control" in user_input:
+                control_id = user_input["delete_control"]
+                device_data[CONF_CONTROLS] = [c for c in controls if c[CONF_ID] != control_id]
+                self.options[CONF_DEVICES] = self.devices
+                return await self.async_step_controls()
+            if "back" in user_input:
+                self.current_device_id = None
+                return await self.async_step_init()
+
+        control_list = {c[CONF_ID]: c[CONF_LABEL] for c in controls}
+
+        return self.async_show_menu(
+            step_id="controls",
+            menu_options=["add_control", "edit_control", "delete_control", "back"],
+            menu_options_dict={
+                "add_control": "Add a new control",
+                "edit_control": "Edit a control",
+                "delete_control": "Delete a control",
+                "back": "Back to devices",
+            },
+            menu_options_dropdown_items=control_list,
+        )
+
+    async def async_step_control(self, user_input=None):
+        errors = {}
+        device_data = next((d for d in self.devices if d[CONF_ID] == self.current_device_id), {})
+        controls = device_data.get(CONF_CONTROLS, [])
+        control_data = {}
+        if self.current_control_id:
+            control_data = next((c for c in controls if c[CONF_ID] == self.current_control_id), {})
+
+        if user_input is not None:
+            control_data[CONF_LABEL] = user_input[CONF_LABEL]
+            control_data[CONF_TYPE] = user_input[CONF_TYPE]
+            control_data[CONF_ENTITY] = user_input[CONF_ENTITY]
+            control_data[CONF_MIN] = user_input.get(CONF_MIN)
+            control_data[CONF_MAX] = user_input.get(CONF_MAX)
+            control_data[CONF_STEP] = user_input.get(CONF_STEP)
+            control_data[CONF_OPTIONS] = user_input.get(CONF_OPTIONS)
+
+            if not self.current_control_id:
+                control_data[CONF_ID] = str(uuid.uuid4())
+                controls.append(control_data)
+            
+            device_data[CONF_CONTROLS] = controls
+            self.options[CONF_DEVICES] = self.devices
+            self.current_control_id = None
+            return await self.async_step_controls()
+
+        return self.async_show_form(
+            step_id="control",
+            data_schema=vol.Schema({
+                vol.Required(CONF_LABEL, default=control_data.get(CONF_LABEL, "")): TextSelector(),
+                vol.Required(CONF_TYPE, default=control_data.get(CONF_TYPE, "switch")): SelectSelector(
+                    SelectSelectorConfig(options=CONTROL_TYPES, mode=SelectSelectorMode.DROPDOWN)
+                ),
+                vol.Required(CONF_ENTITY, default=control_data.get(CONF_ENTITY, "")): EntitySelector(),
+                vol.Optional(CONF_MIN, default=control_data.get(CONF_MIN, 0)): NumberSelector(NumberSelectorConfig(min=0, max=1000, step=1, mode="slider")),
+                vol.Optional(CONF_MAX, default=control_data.get(CONF_MAX, 100)): NumberSelector(NumberSelectorConfig(min=0, max=1000, step=1, mode="slider")),
+                vol.Optional(CONF_STEP, default=control_data.get(CONF_STEP, 1)): NumberSelector(NumberSelectorConfig(min=1, max=100, step=1, mode="slider")),
+                vol.Optional(CONF_OPTIONS, default=control_data.get(CONF_OPTIONS, "")): TextSelector(),
+            }),
+            errors=errors,
+        )
