@@ -27,7 +27,7 @@ class MeshPanelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_mqtt(self, discovery_info=None) -> FlowResult:
+    async def async_step_discovery(self, discovery_info=None) -> FlowResult:
         # Called by __init__.py when we see smartpanel/announce
         panel_id = (discovery_info or {}).get(CONF_PANEL_ID)
         if not panel_id:

@@ -30,7 +30,7 @@ async def async_setup(hass: HomeAssistant, config):
             # Start discovery flow
             await hass.config_entries.flow.async_init(
                 DOMAIN,
-                context={"source": "mqtt"},
+                context={"source": "discovery"},
                 data={CONF_PANEL_ID: panel_id},
             )
             _LOGGER.info("Discovered MESH Panel via MQTT: %s", panel_id)
