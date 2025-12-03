@@ -41,7 +41,22 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             return await self.async_step_device_menu()
 
         devices = self.options.get(CONF_DEVICES, [])
-        device_map = {d[CONF_ID]: d[CONF_NAME] for d in devices}
+        if devices is None:
+            devices = []
+        
+        device_map = {}
+        try:
+            device_map = {d[CONF_ID]: d[CONF_NAME] for d in devices}
+        except (KeyError, TypeError) as e:
+            _LOGGER.error("Invalid device configuration, please fix it in YAML editor: %s", e)
+            # Show a simplified menu to allow user to go to YAML editor
+            return self.async_show_form(
+                step_id="init",
+                data_schema=vol.Schema({
+                    vol.Required("action"): vol.In({"yaml": "Fix devices configuration (YAML)"})
+                }),
+                errors={"base": "invalid_device_config"}
+            )
         
         options = {"add": "Add a new device", "yaml": "Configure with YAML", **device_map}
 
@@ -65,11 +80,13 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
                 
                 # Basic validation and add IDs
                 for device in devices:
-                    if not isinstance(device, dict) or "name" not in device or "controls" not in device:
+                    if not isinstance(device, dict) or not device.get("name") or not isinstance(device.get("controls"), list):
                         raise ValueError("Invalid device structure in YAML")
                     if "id" not in device:
                         device["id"] = str(uuid.uuid4())
                     for control in device.get("controls", []):
+                        if not isinstance(control, dict) or not control.get("label"):
+                            raise ValueError("Invalid control structure in YAML")
                         if "id" not in control:
                             control["id"] = str(uuid.uuid4())
                 
@@ -81,20 +98,13 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
                 errors["base"] = "invalid_yaml"
 
         current_devices = self.options.get(CONF_DEVICES, [])
-        devices_for_yaml = []
+        current_yaml = ""
         if current_devices:
-            for device in current_devices:
-                device_copy = device.copy()
-                device_copy.pop("id", None)
-                controls_copy = []
-                for control in device_copy.get("controls", []):
-                    control_copy = control.copy()
-                    control_copy.pop("id", None)
-                    controls_copy.append(control_copy)
-                device_copy["controls"] = controls_copy
-                devices_for_yaml.append(device_copy)
-
-        current_yaml = yaml.dump(devices_for_yaml) if devices_for_yaml else ""
+            try:
+                current_yaml = yaml.dump(current_devices)
+            except Exception as e:
+                _LOGGER.error("Error dumping current config to YAML: %s", e)
+                errors["base"] = "yaml_dump_error"
 
         return self.async_show_form(
             step_id="yaml",
@@ -111,7 +121,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             if "edit" == user_input["action"]:
                 return await self.async_step_device()
             if "delete" == user_input["action"]:
-                devices = [d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] != self.current_device_id]
+                devices = [d for d in self.options.get(CONF_DEVICES, []) if d.get(CONF_ID) != self.current_device_id]
                 self.options[CONF_DEVICES] = devices
                 return self.async_create_entry(title="", data=self.options)
             if "controls" == user_input["action"]:
@@ -131,13 +141,13 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         errors = {}
         device_data = {}
         if self.current_device_id:
-            device_data = next((d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] == self.current_device_id), {})
+            device_data = next((d for d in self.options.get(CONF_DEVICES, []) if d.get(CONF_ID) == self.current_device_id), {})
 
         if user_input is not None:
             devices = self.options.get(CONF_DEVICES, [])
             if self.current_device_id: # Edit
                 for i, d in enumerate(devices):
-                    if d[CONF_ID] == self.current_device_id:
+                    if d.get(CONF_ID) == self.current_device_id:
                         devices[i] = {**d, **user_input}
                         break
             else: # Add
@@ -159,10 +169,11 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_controls(self, user_input=None):
         """Manage controls for a device."""
-        device = next((d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] == self.current_device_id), None)
+        device = next((d for d in self.options.get(CONF_DEVICES, []) if d.get(CONF_ID) == self.current_device_id), None)
         if not device:
             return await self.async_step_init()
         controls = device.get(CONF_CONTROLS, [])
+        if controls is None: controls = []
         
         if user_input is not None:
             if "add" == user_input["action"]:
@@ -175,7 +186,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             self.current_control_id = user_input["action"]
             return await self.async_step_control_menu()
 
-        control_map = {c.get('id'): c.get('label') for c in controls if c.get('id')}
+        control_map = {c.get('id'): c.get('label') for c in controls if c.get('id') and c.get('label')}
         options = {"add": "Add a new control", **control_map, "back": "Back"}
 
         return self.async_show_form(
@@ -193,8 +204,8 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             if "delete" == user_input["action"]:
                 devices = self.options.get(CONF_DEVICES, [])
                 for i, d in enumerate(devices):
-                    if d[CONF_ID] == self.current_device_id:
-                        controls = [c for c in d.get(CONF_CONTROLS, []) if c[CONF_ID] != self.current_control_id]
+                    if d.get(CONF_ID) == self.current_device_id:
+                        controls = [c for c in d.get(CONF_CONTROLS, []) if c.get(CONF_ID) != self.current_control_id]
                         devices[i][CONF_CONTROLS] = controls
                         break
                 self.options[CONF_DEVICES] = devices
@@ -213,15 +224,15 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         """Handle control add/edit."""
         errors = {}
         if self.current_control_id:
-            device = next((d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] == self.current_device_id), {})
+            device = next((d for d in self.options.get(CONF_DEVICES, []) if d.get(CONF_ID) == self.current_device_id), {})
             controls = device.get(CONF_CONTROLS, [])
-            self.control_data = next((c for c in controls if c[CONF_ID] == self.current_control_id), {})
+            self.control_data = next((c for c in controls if c.get(CONF_ID) == self.current_control_id), {})
 
         if user_input is not None:
             self.control_data.update(user_input)
-            if self.control_data[CONF_TYPE] == "slider":
+            if self.control_data.get(CONF_TYPE) == "slider":
                 return await self.async_step_control_slider()
-            if self.control_data[CONF_TYPE] == "select":
+            if self.control_data.get(CONF_TYPE) == "select":
                 return await self.async_step_control_select()
             
             return await self._save_control()
@@ -275,7 +286,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
     async def _save_control(self):
         """Save the control data."""
         devices = self.options.get(CONF_DEVICES, [])
-        device = next((d for d in devices if d[CONF_ID] == self.current_device_id), None)
+        device = next((d for d in devices if d.get(CONF_ID) == self.current_device_id), None)
         if not device:
             return self.async_abort(reason="unknown")
         
@@ -287,7 +298,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         controls = device.get(CONF_CONTROLS, [])
         if self.current_control_id: # Edit
             for i, c in enumerate(controls):
-                if c[CONF_ID] == self.current_control_id:
+                if c.get(CONF_ID) == self.current_control_id:
                     controls[i] = self.control_data
                     break
         else: # Add
