@@ -227,7 +227,6 @@ class MeshPanelController:
                     break
         
         if found:
-            _LOGGER.info(f"[MESH PANEL {self.panel_id}] Publishing state: {json.dumps(payload)}")
             self.hass.async_create_task(
                 mqtt.async_publish(self.hass, self.topic_state, json.dumps(payload))
             )
