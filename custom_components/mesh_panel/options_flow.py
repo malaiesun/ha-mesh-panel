@@ -118,7 +118,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         """Handle device add/edit."""
         device_data = {}
         if self.current_device_id:
-            device_data = next((d for d in self.devices if d["id"] == self.current_device_id), {})
+            device_data = next((d for d in self.devices if d["id"] == self.current_device_id), {{}})
 
         if user_input is not None:
             if self.current_device_id: # Edit
