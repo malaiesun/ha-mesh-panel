@@ -15,6 +15,7 @@ from homeassistant.const import (
 )
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
 from homeassistant.helpers.event import async_track_state_change_event
+import homeassistant.util.color as color_util  # Import moved to top
 
 from .const import *
 
@@ -186,73 +187,42 @@ class MeshPanelController:
                 val = int(data["value"])
 
                 if attribute:
-                    # ------------------------
-                    # LIGHT ATTRIBUTE SLIDER
-                    # ------------------------
                     if domain == "light":
                         service = SERVICE_TURN_ON
-
                         numeric_attrs = {
-                            "brightness",
-                            "color_temp",
-                            "color_temp_kelvin",
-                            "min_mireds",
-                            "max_mireds",
-                            "min_color_temp_kelvin",
-                            "max_color_temp_kelvin",
+                            "brightness", "color_temp", "color_temp_kelvin",
+                            "min_mireds", "max_mireds", 
+                            "min_color_temp_kelvin", "max_color_temp_kelvin"
                         }
                         if attribute in numeric_attrs:
                             service_data[attribute] = val
-
                         elif attribute == "hs_hue":
                             cur = state.attributes.get("hs_color", [0, 100])
                             service_data["hs_color"] = [val, cur[1]]
-
                         elif attribute == "hs_saturation":
                             cur = state.attributes.get("hs_color", [0, 100])
                             service_data["hs_color"] = [cur[0], val]
-
                         elif attribute == "xy_x":
                             cur = state.attributes.get("xy_color", [0.5, 0.5])
                             service_data["xy_color"] = [val / 1000.0, cur[1]]
-
                         elif attribute == "xy_y":
                             cur = state.attributes.get("xy_color", [0.5, 0.5])
                             service_data["xy_color"] = [cur[0], val / 1000.0]
-
                         else:
                             service_data[attribute] = val
-
-                    # ------------------------
-                    # CLIMATE
-                    # ------------------------
                     elif domain == "climate":
                         service = "set_temperature"
                         service_data["temperature"] = val
-
-                    # ------------------------
-                    # FAN
-                    # ------------------------
                     elif domain == "fan":
                         service = "set_percentage"
                         service_data["percentage"] = val
-
-                    # ------------------------
-                    # MEDIA PLAYER
-                    # ------------------------
                     elif domain == "media_player":
                         service = "volume_set"
                         service_data["volume_level"] = val / 100.0
-
-                    # ------------------------
-                    # GENERIC
-                    # ------------------------
                     else:
                         service = "set_value"
                         service_data["value"] = val
-
                 else:
-                    # Default slider without attribute
                     if domain == "light":
                         service = SERVICE_TURN_ON
                         service_data[ATTR_BRIGHTNESS] = val
@@ -288,6 +258,15 @@ class MeshPanelController:
 
         except Exception as e:
             _LOGGER.exception("Action error: %s", e)
+
+    def _to_rgb_list(self, rgb_tuple):
+        """Ensure RGB is a simple list of integers [r,g,b]."""
+        if not rgb_tuple:
+            return None
+        try:
+            return [int(c) for c in rgb_tuple][:3]
+        except:
+            return None
 
     async def _publish_entity_state(self, raw_id: str):
         """Send ONLY ONE entity update to panel."""
@@ -328,29 +307,40 @@ class MeshPanelController:
                 payload["value"] = 0
 
         elif ctype == "color":
-            rgb = state.attributes.get("rgb_color")
+            rgb = None
+            attrs = state.attributes
+            
+            # 1. Try Direct RGB
+            if ATTR_RGB_COLOR in attrs:
+                rgb = self._to_rgb_list(attrs[ATTR_RGB_COLOR])
+            
+            # 2. Try RGBWW / RGBW
+            if not rgb and "rgbww_color" in attrs:
+                rgb = self._to_rgb_list(attrs["rgbww_color"])
+            if not rgb and "rgbw_color" in attrs:
+                rgb = self._to_rgb_list(attrs["rgbw_color"])
 
-            # rgbww / rgbw fallback
-            if not rgb:
-                if "rgbww_color" in state.attributes:
-                    rgb = state.attributes["rgbww_color"][:3]
-                elif "rgbw_color" in state.attributes:
-                    rgb = state.attributes["rgbw_color"][:3]
+            # 3. Try XY (Common for Hue/Zigbee)
+            if not rgb and "xy_color" in attrs:
+                try:
+                    x, y = attrs["xy_color"]
+                    # Convert XY to RGB, assuming max brightness (255) for color calculation
+                    rgb_tuple = color_util.color_xy_to_RGB(x, y, 255)
+                    rgb = self._to_rgb_list(rgb_tuple)
+                except Exception:
+                    pass
 
-            # hs fallback
-            if not rgb and "hs_color" in state.attributes:
-                h, s = state.attributes["hs_color"]
-                from homeassistant.util import color as color_util
-                rgb = color_util.color_hs_to_RGB(h, s)
+            # 4. Try HS
+            if not rgb and "hs_color" in attrs:
+                try:
+                    h, s = attrs["hs_color"]
+                    rgb_tuple = color_util.color_hs_to_RGB(h, s)
+                    rgb = self._to_rgb_list(rgb_tuple)
+                except Exception:
+                    pass
 
-            # xy fallback
-            if not rgb and "xy_color" in state.attributes:
-                x, y = state.attributes["xy_color"]
-                from homeassistant.util import color as color_util
-                rgb = color_util.color_xy_to_RGB(x, y, 255)
-
+            # Default to black if off or unknown
             payload["rgb_color"] = rgb or [0, 0, 0]
-
 
         elif ctype == "select":
             payload["option"] = state.state
