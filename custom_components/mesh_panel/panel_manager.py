@@ -307,44 +307,11 @@ class MeshPanelController:
                 payload["value"] = 0
 
         elif ctype == "color":
-            # Default to [0, 0, 0] (Green)
-            final_rgb = [0, 255, 0]
-
-            # Only calculate color if the light is actually ON (Set to always for debugging :)
-            if True:
-                attrs = state.attributes
-                
-                # 1. Try Direct RGB (Best)
-                if ATTR_RGB_COLOR in attrs:
-                    final_rgb = self._to_rgb_list(attrs[ATTR_RGB_COLOR])
-                
-                # 2. Try RGBWW / RGBW (Strip extra white channels)
-                elif "rgbww_color" in attrs:
-                    final_rgb = self._to_rgb_list(attrs["rgbww_color"])
-                elif "rgbw_color" in attrs:
-                    final_rgb = self._to_rgb_list(attrs["rgbw_color"])
-
-                # 3. Try HS Color (Convert to RGB)
-                elif "hs_color" in attrs:
-                    try:
-                        h, s = attrs["hs_color"]
-                        # Convert HS to RGB
-                        rgb_tuple = color_util.color_hs_to_RGB(h, s)
-                        final_rgb = self._to_rgb_list(rgb_tuple)
-                    except Exception:
-                        pass
-                
-                # 4. Try XY Color (Convert to RGB - common for Zigbee/Hue)
-                elif "xy_color" in attrs:
-                    try:
-                        x, y = attrs["xy_color"]
-                        # Convert XY to RGB (assuming max brightness for color wheel)
-                        rgb_tuple = color_util.color_xy_to_RGB(x, y, 255)
-                        final_rgb = self._to_rgb_list(rgb_tuple)
-                    except Exception:
-                        pass
-
-            payload["rgb_color"] = final_rgb or [0, 0, 0]
+            rgb = state.attributes.get(ATTR_RGB_COLOR)
+            if rgb:
+                payload['rgb_color'] = rgb
+            else:
+                payload['rgb_color'] = [0, 0, 0] # Default to black/off
 
         elif ctype == "select":
             payload["option"] = state.state
