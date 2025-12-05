@@ -420,45 +420,78 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_yaml_editor(self, user_input=None):
         """Raw YAML editor: validate and SAVE immediately on submit."""
         errors = {}
-        if user_input is not None:
-            raw_text = user_input.get("yaml_text", "")
-            try:
-                devices = _parse_raw_to_devices(raw_text)
-                self.options[CONF_DEVICES] = devices
-                self._sync_raw_from_devices()
-                return self.async_create_entry(title="", data=self.options)
-            except ValueError:
-                # Use a standard key so HA shows a proper message
-                errors["base"] = "invalid"
 
-        # Use plain str field; HA renders textarea for multiline
+        if user_input is not None:
+            action = user_input.get("action")
+            raw_text = user_input.get("yaml_text", "")
+
+            if action == "back":
+                return await self.async_step_init()
+
+            if action == "finish":
+                try:
+                    devices = _parse_raw_to_devices(raw_text)
+                    self.options[CONF_DEVICES] = devices
+                    self._sync_raw_from_devices()
+                    return self.async_create_entry(title="", data=self.options)
+                except Exception as e:
+                    errors["base"] = "invalid"
+                    _LOGGER.error("YAML editor exception: %s", e)
+
         return self.async_show_form(
             step_id="yaml_editor",
             data_schema=vol.Schema({
-                vol.Required("yaml_text", default=self.options.get(CONF_RAW_YAML, "")): str
+                vol.Required("yaml_text", default=self.options.get(CONF_RAW_YAML, "")): str,
+                vol.Required("action", default="finish"): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            {"label": "Finish", "value": "finish"},
+                            {"label": "Back", "value": "back"},
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN
+                    )
+                )
             }),
             errors=errors,
-            description="Edit the full configuration in YAML. Saving will validate and update the visual editor."
+            description="Edit the YAML configuration. Finish = save."
         )
+
 
     async def async_step_json_editor(self, user_input=None):
         """Raw JSON editor: validate and SAVE immediately on submit."""
         errors = {}
+
         if user_input is not None:
+            action = user_input.get("action")
             raw_text = user_input.get("json_text", "")
-            try:
-                devices = _parse_raw_to_devices(raw_text)
-                self.options[CONF_DEVICES] = devices
-                self._sync_raw_from_devices()
-                return self.async_create_entry(title="", data=self.options)
-            except ValueError:
-                errors["base"] = "invalid"
+
+            if action == "back":
+                return await self.async_step_init()
+
+            if action == "finish":
+                try:
+                    devices = _parse_raw_to_devices(raw_text)
+                    self.options[CONF_DEVICES] = devices
+                    self._sync_raw_from_devices()
+                    return self.async_create_entry(title="", data=self.options)
+                except Exception as e:
+                    errors["base"] = "invalid"
+                    _LOGGER.error("JSON editor exception: %s", e)
 
         return self.async_show_form(
             step_id="json_editor",
             data_schema=vol.Schema({
-                vol.Required("json_text", default=self.options.get(CONF_RAW_JSON, "")): str
+                vol.Required("json_text", default=self.options.get(CONF_RAW_JSON, "")): str,
+                vol.Required("action", default="finish"): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            {"label": "Finish", "value": "finish"},
+                            {"label": "Back", "value": "back"},
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN
+                    )
+                )
             }),
             errors=errors,
-            description="Edit the full configuration in JSON. Saving will validate and update the visual editor."
+            description="Edit the JSON configuration. Finish = save."
         )
