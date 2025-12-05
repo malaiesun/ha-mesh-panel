@@ -20,7 +20,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.selector import (
-    TextSelector,
+    TextSelector,TextSelectorConfig,
     SelectSelector, SelectSelectorConfig, SelectSelectorMode,
     EntitySelector,
     IconSelector,
@@ -438,36 +438,32 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             })
         )
 
-    # ---------------- Select config (AUTOFILL) ----------------
+# ---------------- Select config (AUTOFILL + MANUAL EDIT) ----------------
 
     async def async_step_control_select(self, user_input=None):
-        ent = self.control_data.get(CONF_ENTITY, "")
-        detected = _autodetect_select_options(self.hass, ent)
-
-        if user_input:
-            self.control_data[CONF_ENTITY] = ent
-            self.control_data[CONF_OPTIONS] = "\n".join(detected) if detected else ""
+        if user_input is not None:
+            # Save the manual or auto-detected input
+            self.control_data[CONF_OPTIONS] = user_input.get(CONF_OPTIONS, "")
             await self._save_control(stay_in_flow=True)
             return await self.async_step_controls()
 
-        # Build readable text inside a fake "info" field
-        if detected:
-            info_text = "Detected options:\n" + "\n".join(f"- {o}" for o in detected)
-        else:
-            info_text = "No options detected for this entity."
+        # Determine default value
+        default_text = self.control_data.get(CONF_OPTIONS, "")
+        
+        # If no options saved yet, try to auto-detect
+        if not default_text:
+            ent = self.control_data.get(CONF_ENTITY, "")
+            detected = _autodetect_select_options(self.hass, ent)
+            if detected:
+                default_text = "\n".join(detected)
 
         return self.async_show_form(
             step_id="control_select",
             data_schema=vol.Schema({
-                vol.Required("info", default=info_text): TextSelector(
-                    {
-                        "multiline": True,
-                        "readonly": True,
-                    }
+                vol.Required(CONF_OPTIONS, default=default_text): TextSelector(
+                    TextSelectorConfig(multiline=True)
                 ),
-                vol.Required("confirm", default=True): bool
-            }),
-            errors={}
+            })
         )
 
     # ---------------- Save helpers ----------------
