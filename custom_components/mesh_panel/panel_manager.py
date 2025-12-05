@@ -162,7 +162,6 @@ class MeshPanelController:
             if not raw_id:
                 return
 
-            # Panel requesting fresh state for one entity
             if data.get("get_state"):
                 await self._publish_entity_state(raw_id)
                 return
@@ -173,6 +172,7 @@ class MeshPanelController:
 
             ha_entity, attribute = decode_entity(raw_id)
             domain = ha_entity.split(".")[0]
+            state = self.hass.states.get(ha_entity)
 
             service_data = {ATTR_ENTITY_ID: ha_entity}
             service = None
@@ -186,28 +186,88 @@ class MeshPanelController:
                 val = int(data["value"])
 
                 if attribute:
-                    service = f"set_{attribute}"
-                    service_data[attribute] = val
+                    # ------------------------
+                    # LIGHT ATTRIBUTE SLIDER
+                    # ------------------------
+                    if domain == "light":
+                        service = SERVICE_TURN_ON
 
-                elif domain == "light":
-                    service = SERVICE_TURN_ON
-                    service_data[ATTR_BRIGHTNESS] = val
+                        numeric_attrs = {
+                            "brightness",
+                            "color_temp",
+                            "color_temp_kelvin",
+                            "min_mireds",
+                            "max_mireds",
+                            "min_color_temp_kelvin",
+                            "max_color_temp_kelvin",
+                        }
+                        if attribute in numeric_attrs:
+                            service_data[attribute] = val
 
-                elif domain == "fan":
-                    service = "set_percentage"
-                    service_data["percentage"] = val
+                        elif attribute == "hs_hue":
+                            cur = state.attributes.get("hs_color", [0, 100])
+                            service_data["hs_color"] = [val, cur[1]]
 
-                elif domain == "media_player":
-                    service = "volume_set"
-                    service_data["volume_level"] = val / 100.0
+                        elif attribute == "hs_saturation":
+                            cur = state.attributes.get("hs_color", [0, 100])
+                            service_data["hs_color"] = [cur[0], val]
 
-                elif domain == "climate":
-                    service = "set_temperature"
-                    service_data["temperature"] = val
+                        elif attribute == "xy_x":
+                            cur = state.attributes.get("xy_color", [0.5, 0.5])
+                            service_data["xy_color"] = [val / 1000.0, cur[1]]
+
+                        elif attribute == "xy_y":
+                            cur = state.attributes.get("xy_color", [0.5, 0.5])
+                            service_data["xy_color"] = [cur[0], val / 1000.0]
+
+                        else:
+                            service_data[attribute] = val
+
+                    # ------------------------
+                    # CLIMATE
+                    # ------------------------
+                    elif domain == "climate":
+                        service = "set_temperature"
+                        service_data["temperature"] = val
+
+                    # ------------------------
+                    # FAN
+                    # ------------------------
+                    elif domain == "fan":
+                        service = "set_percentage"
+                        service_data["percentage"] = val
+
+                    # ------------------------
+                    # MEDIA PLAYER
+                    # ------------------------
+                    elif domain == "media_player":
+                        service = "volume_set"
+                        service_data["volume_level"] = val / 100.0
+
+                    # ------------------------
+                    # GENERIC
+                    # ------------------------
+                    else:
+                        service = "set_value"
+                        service_data["value"] = val
 
                 else:
-                    service = "set_value"
-                    service_data["value"] = val
+                    # Default slider without attribute
+                    if domain == "light":
+                        service = SERVICE_TURN_ON
+                        service_data[ATTR_BRIGHTNESS] = val
+                    elif domain == "fan":
+                        service = "set_percentage"
+                        service_data["percentage"] = val
+                    elif domain == "media_player":
+                        service = "volume_set"
+                        service_data["volume_level"] = val / 100.0
+                    elif domain == "climate":
+                        service = "set_temperature"
+                        service_data["temperature"] = val
+                    else:
+                        service = "set_value"
+                        service_data["value"] = val
 
             # COLOR
             elif "rgb_color" in data:
@@ -251,11 +311,9 @@ class MeshPanelController:
         ctype = control.get("type")
         domain = ha_entity.split(".")[0]
 
-        # SWITCH
         if ctype == "switch":
             payload["state"] = state.state
 
-        # SLIDER
         elif ctype == "slider":
             if attribute:
                 val = state.attributes.get(attribute)
@@ -269,11 +327,9 @@ class MeshPanelController:
             except:
                 payload["value"] = 0
 
-        # COLOR
         elif ctype == "color":
             payload["rgb_color"] = state.attributes.get(ATTR_RGB_COLOR, [0, 0, 0])
 
-        # SELECT
         elif ctype == "select":
             payload["option"] = state.state
 
@@ -288,7 +344,6 @@ class MeshPanelController:
 
         entity_id = event.data["entity_id"]
 
-        # publish only entities that match encoded IDs
         for dev in self.devices_config:
             for control in dev.get("controls", []):
                 ent = control.get("entity")
@@ -300,4 +355,3 @@ class MeshPanelController:
                     self.hass.async_create_task(
                         self._publish_entity_state(ent)
                     )
-
