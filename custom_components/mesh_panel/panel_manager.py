@@ -307,11 +307,11 @@ class MeshPanelController:
                 payload["value"] = 0
 
         elif ctype == "color":
-            # Default to [0, 0, 0] (Black/Off)
-            final_rgb = [0, 0, 0]
+            # Default to [0, 0, 0] (Green)
+            final_rgb = [0, 255, 0]
 
-            # Only calculate color if the light is actually ON
-            if state.state == "on":
+            # Only calculate color if the light is actually ON (Set to always for debugging :)
+            if True:
                 attrs = state.attributes
                 
                 # 1. Try Direct RGB (Best)
