@@ -2,6 +2,7 @@
 import logging
 import uuid
 import json
+import copy
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -102,8 +103,9 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry):
         self.config_entry = config_entry
-        # Work on a copy; persist only on Done or raw editor submit
-        self.options = dict(config_entry.options)
+        # FIX: Use deepcopy to ensure we don't mutate the immutable config entry data
+        self.options = copy.deepcopy(dict(config_entry.options))
+        
         self.options.setdefault(CONF_DEVICES, [])
         self.options.setdefault(CONF_RAW_YAML, _pretty_yaml(self.options.get(CONF_DEVICES, [])))
         self.options.setdefault(CONF_RAW_JSON, _pretty_json(self.options.get(CONF_DEVICES, [])))
@@ -115,6 +117,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
     # ----------------- TOP MENU -----------------
     async def async_step_init(self, user_input=None):
         """Top menu: Visual / YAML / JSON only."""
+        # This sync call was likely crashing before the deepcopy fix
         self._sync_raw_from_devices()
 
         if user_input is not None:
@@ -368,7 +371,6 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="control_select",
             data_schema=vol.Schema({
-                # Use plain str to avoid selector crashes on long multiline values
                 vol.Optional(CONF_OPTIONS, default=self.control_data.get(CONF_OPTIONS, "")): str,
             }),
             description="Enter one option per line (or comma-separated)."
@@ -380,7 +382,6 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         devices = self.options.get(CONF_DEVICES, [])
         device = next((d for d in devices if d[CONF_ID] == self.current_device_id), None)
         if not device:
-            # Nothing to do; return to visual to avoid dead-end
             return await self.async_step_visual()
 
         # Normalize select options: accept commas, store newline-joined
@@ -403,7 +404,6 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
 
         device[CONF_CONTROLS] = controls
         self.options[CONF_DEVICES] = _ensure_ids(devices)
-        # Do not persist now; user will hit Done in visual menu
         return await self.async_step_controls()
 
     def _sync_raw_from_devices(self):
@@ -411,7 +411,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         devices = _ensure_ids(self.options.get(CONF_DEVICES, []))
         try:
             self.options[CONF_RAW_YAML] = _pretty_yaml(devices)
-        except Exception as e:  # pragma: no cover
+        except Exception as e:
             _LOGGER.debug("YAML dump failed: %s", e)
             self.options[CONF_RAW_YAML] = "devices: []\n" if not devices else _pretty_json(devices)
         self.options[CONF_RAW_JSON] = _pretty_json(devices)
@@ -441,7 +441,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="yaml_editor",
             data_schema=vol.Schema({
-                # FIX: Use TextSelector with multiline=True
+                # Corrected: Using TextSelector for multiline editor
                 vol.Required("yaml_text", default=self.options.get(CONF_RAW_YAML, "")): TextSelector(
                     TextSelectorConfig(multiline=True)
                 ),
@@ -483,7 +483,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="json_editor",
             data_schema=vol.Schema({
-                # FIX: Use TextSelector with multiline=True
+                # Corrected: Using TextSelector for multiline editor
                 vol.Required("json_text", default=self.options.get(CONF_RAW_JSON, "")): TextSelector(
                     TextSelectorConfig(multiline=True)
                 ),
@@ -500,4 +500,3 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description="Edit the JSON configuration. Finish = save."
         )
-        
