@@ -10,7 +10,7 @@ from homeassistant.helpers.selector import (
     EntitySelector,
     IconSelector,
     NumberSelector, NumberSelectorConfig,
-    TextSelector, TextSelectorConfig,  # keep available if you use elsewhere
+    TextSelector, TextSelectorConfig,
 )
 
 from .const import (
@@ -227,7 +227,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
                 # Don’t persist; return to device menu
                 return await self.async_step_device_menu()
             else:
-                # New device → assign id + empty controls, then go to controls for this device
+                # New device → assign id + empty controls, then go to controls for this new device
                 user_input.setdefault(CONF_ID, str(uuid.uuid4()))
                 user_input.setdefault(CONF_CONTROLS, [])
                 devices.append(user_input)
@@ -441,7 +441,10 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="yaml_editor",
             data_schema=vol.Schema({
-                vol.Required("yaml_text", default=self.options.get(CONF_RAW_YAML, "")): str,
+                # FIX: Use TextSelector with multiline=True
+                vol.Required("yaml_text", default=self.options.get(CONF_RAW_YAML, "")): TextSelector(
+                    TextSelectorConfig(multiline=True)
+                ),
                 vol.Required("action", default="finish"): SelectSelector(
                     SelectSelectorConfig(
                         options=[
@@ -455,7 +458,6 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description="Edit the YAML configuration. Finish = save."
         )
-
 
     async def async_step_json_editor(self, user_input=None):
         """Raw JSON editor: validate and SAVE immediately on submit."""
@@ -481,7 +483,10 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="json_editor",
             data_schema=vol.Schema({
-                vol.Required("json_text", default=self.options.get(CONF_RAW_JSON, "")): str,
+                # FIX: Use TextSelector with multiline=True
+                vol.Required("json_text", default=self.options.get(CONF_RAW_JSON, "")): TextSelector(
+                    TextSelectorConfig(multiline=True)
+                ),
                 vol.Required("action", default="finish"): SelectSelector(
                     SelectSelectorConfig(
                         options=[
@@ -495,3 +500,4 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description="Edit the JSON configuration. Finish = save."
         )
+        
