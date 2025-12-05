@@ -1,290 +1,139 @@
-"""Options flow for MESH Smart Home Panel (visual + raw YAML/JSON, kept in sync)."""
+"""
+Options flow for MESH Smart Home Panel."""
 import logging
 import uuid
-import json
-import copy
 import voluptuous as vol
-
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    TextSelector,
     SelectSelector, SelectSelectorConfig, SelectSelectorMode,
     EntitySelector,
     IconSelector,
     NumberSelector, NumberSelectorConfig,
-    TextSelector, TextSelectorConfig,
 )
-
-from .const import (
-    DOMAIN,
-    CONF_DEVICES,
-    CONF_RAW_YAML, CONF_RAW_JSON,
-    CONF_ID, CONF_NAME, CONF_ICON, CONF_CONTROLS,
-    CONF_LABEL, CONF_TYPE, CONF_ENTITY,
-    CONF_MIN, CONF_MAX, CONF_STEP, CONF_OPTIONS, CONF_ATTRIBUTE,
-    CONTROL_TYPES,
-)
+from .const import *
 
 _LOGGER = logging.getLogger(__name__)
 
-try:
-    import yaml  # Home Assistant bundles PyYAML
-except Exception:  # pragma: no cover
-    yaml = None
-
-
-def _pretty_json(devices: list) -> str:
-    return json.dumps({"devices": devices or []}, indent=2, ensure_ascii=False)
-
-
-def _pretty_yaml(devices: list) -> str:
-    if not yaml:
-        return "devices: []\n" if not devices else _pretty_json(devices)
-    return yaml.safe_dump({"devices": devices or []}, sort_keys=False)
-
-
-def _ensure_ids(devices: list) -> list:
-    """Ensure every device and control has a stable UUID."""
-    for d in devices or []:
-        d.setdefault(CONF_ID, str(uuid.uuid4()))
-        d.setdefault(CONF_CONTROLS, [])
-        for c in d[CONF_CONTROLS]:
-            c.setdefault(CONF_ID, str(uuid.uuid4()))
-    return devices
-
-
-def _validate_devices(devices: list):
-    """Validate minimal structure; raise ValueError on problems."""
-    if not isinstance(devices, list):
-        raise ValueError("devices must be a list")
-    for d in devices:
-        if not isinstance(d, dict):
-            raise ValueError("device must be an object")
-        for key in (CONF_NAME, CONF_ICON, CONF_CONTROLS, CONF_ID):
-            if key not in d:
-                raise ValueError(f"device missing key: {key}")
-        if not isinstance(d[CONF_CONTROLS], list):
-            raise ValueError("controls must be a list")
-        for c in d[CONF_CONTROLS]:
-            if not isinstance(c, dict):
-                raise ValueError("control must be an object")
-            for key in (CONF_ID, CONF_LABEL, CONF_TYPE, CONF_ENTITY):
-                if key not in c:
-                    raise ValueError(f"control missing key: {key}")
-
-
-def _parse_raw_to_devices(raw: str) -> list:
-    """Accept YAML or JSON; return devices list or raise ValueError."""
-    raw = (raw or "").strip()
-    if not raw:
-        return []
-    data = None
-    # Try JSON first
-    try:
-        data = json.loads(raw)
-    except Exception:
-        # Try YAML
-        if yaml:
-            try:
-                data = yaml.safe_load(raw)
-            except Exception as e:
-                raise ValueError(f"Invalid YAML/JSON: {e}") from e
-        else:
-            raise ValueError("Invalid JSON (YAML not available)")
-    if not isinstance(data, dict) or "devices" not in data:
-        raise ValueError("Root must be an object with a 'devices' key")
-    devices = data.get("devices") or []
-    devices = _ensure_ids(devices)
-    _validate_devices(devices)
-    return devices
-
-
 class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle an options flow for MESH Panel with visual + raw editors."""
+    """Handle an options flow for MESH Panel."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry):
+        """Initialize options flow."""
         self.config_entry = config_entry
-        # FIX: Use deepcopy to ensure we don't mutate the immutable config entry data
-        self.options = copy.deepcopy(dict(config_entry.options))
-        
-        self.options.setdefault(CONF_DEVICES, [])
-        self.options.setdefault(CONF_RAW_YAML, _pretty_yaml(self.options.get(CONF_DEVICES, [])))
-        self.options.setdefault(CONF_RAW_JSON, _pretty_json(self.options.get(CONF_DEVICES, [])))
-
+        self.options = dict(config_entry.options)
         self.current_device_id = None
         self.current_control_id = None
         self.control_data = {}
 
-    # ----------------- TOP MENU -----------------
     async def async_step_init(self, user_input=None):
-        """Top menu: Visual / YAML / JSON only."""
-        # This sync call was likely crashing before the deepcopy fix
-        self._sync_raw_from_devices()
-
+        """Manage the devices."""
         if user_input is not None:
-            action = user_input["action"]
-            if action == "visual":
-                return await self.async_step_visual()
-            if action == "yaml":
-                return await self.async_step_yaml_editor()
-            if action == "json":
-                return await self.async_step_json_editor()
+            if "add" == user_input["action"]:
+                self.current_device_id = None
+                return await self.async_step_device()
+            
+            self.current_device_id = user_input["action"]
+            return await self.async_step_device_menu()
 
-        options = [
-            {"label": "Visual Editor", "value": "visual"},
-            {"label": "YAML Editor", "value": "yaml"},
-            {"label": "JSON Editor", "value": "json"},
-        ]
+        devices = self.options.get(CONF_DEVICES, [])
+        device_map = {d[CONF_ID]: d[CONF_NAME] for d in devices}
+        
+        options = {"add": "Add a new device", **device_map}
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
-                vol.Required("action"): SelectSelector(
-                    SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
-                )
+                vol.Required("action", default="add"): vol.In(options)
             })
         )
 
-    # ----------------- VISUAL EDITOR MENU -----------------
-    async def async_step_visual(self, user_input=None):
-        """Visual editor main menu: Add device / list devices / Done."""
-        if user_input is not None:
-            action = user_input["action"]
-            if action == "add":
-                self.current_device_id = None
-                return await self.async_step_device()
-            if action == "done":
-                # Persist changes
-                self._sync_raw_from_devices()
-                return self.async_create_entry(title="", data=self.options)
-            # clicked a device id -> device menu
-            self.current_device_id = action
-            return await self.async_step_device_menu()
-
-        devices = self.options.get(CONF_DEVICES, []) or []
-        device_map = {d[CONF_ID]: d[CONF_NAME] for d in devices}
-
-        options = [{"label": "Add Device", "value": "add"}]
-        options += [{"label": name, "value": dev_id} for dev_id, name in device_map.items()]
-        options += [{"label": "Done", "value": "done"}]
-
-        return self.async_show_form(
-            step_id="visual",
-            data_schema=vol.Schema({
-                vol.Required("action", default="add"): SelectSelector(
-                    SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
-                )
-            })
-        )
-
-    # ----------------- DEVICE MENU -----------------
     async def async_step_device_menu(self, user_input=None):
+        """Handle the device menu."""
         if user_input is not None:
-            action = user_input["action"]
-            if action == "edit":
+            if "edit" == user_input["action"]:
                 return await self.async_step_device()
-            if action == "delete":
+            if "delete" == user_input["action"]:
                 devices = [d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] != self.current_device_id]
                 self.options[CONF_DEVICES] = devices
-                # Stay in visual editor; don't persist yet
-                return await self.async_step_visual()
-            if action == "controls":
+                return self.async_create_entry(title="", data=self.options)
+            if "controls" == user_input["action"]:
                 return await self.async_step_controls()
-            if action == "back":
-                return await self.async_step_visual()
-
-        options = [
-            {"label": "Edit Device", "value": "edit"},
-            {"label": "Delete Device", "value": "delete"},
-            {"label": "Manage Controls", "value": "controls"},
-            {"label": "Back", "value": "back"},
-        ]
+            if "back" == user_input["action"]:
+                return await self.async_step_init()
 
         return self.async_show_form(
             step_id="device_menu",
             data_schema=vol.Schema({
-                vol.Required("action"): SelectSelector(SelectSelectorConfig(options=options))
+                vol.Required("action"): vol.In({"edit": "Edit Device", "delete": "Delete Device", "controls": "Manage Controls", "back": "Back"})
             })
         )
 
-    # ----------------- ADD / EDIT DEVICE -----------------
     async def async_step_device(self, user_input=None):
-        """Add or edit a device. New device -> go straight to controls. Edit -> back to device menu."""
+        """Handle device add/edit."""
         errors = {}
         device_data = {}
-        is_edit = self.current_device_id is not None
-
-        if is_edit:
-            device_data = next(
-                (d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] == self.current_device_id),
-                {}
-            )
+        if self.current_device_id:
+            device_data = next((d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] == self.current_device_id), {})
 
         if user_input is not None:
             devices = self.options.get(CONF_DEVICES, [])
-            if is_edit:
+            if self.current_device_id: # Edit
                 for i, d in enumerate(devices):
                     if d[CONF_ID] == self.current_device_id:
                         devices[i] = {**d, **user_input}
                         break
-                self.options[CONF_DEVICES] = _ensure_ids(devices)
-                # Don’t persist; return to device menu
-                return await self.async_step_device_menu()
-            else:
-                # New device → assign id + empty controls, then go to controls for this new device
-                user_input.setdefault(CONF_ID, str(uuid.uuid4()))
-                user_input.setdefault(CONF_CONTROLS, [])
+            else: # Add
+                user_input[CONF_ID] = str(uuid.uuid4())
+                user_input[CONF_CONTROLS] = []
                 devices.append(user_input)
-                self.options[CONF_DEVICES] = _ensure_ids(devices)
                 self.current_device_id = user_input[CONF_ID]
-                # Go immediately to controls for this new device
-                return await self.async_step_controls()
+            
+            self.options[CONF_DEVICES] = devices
+            return await self.async_step_device_menu()
 
         return self.async_show_form(
             step_id="device",
             data_schema=vol.Schema({
-                vol.Required(CONF_NAME, default=device_data.get(CONF_NAME, "")): str,
+                vol.Required(CONF_NAME, default=device_data.get(CONF_NAME, "")): TextSelector(),
                 vol.Required(CONF_ICON, default=device_data.get(CONF_ICON, "mdi:power")): IconSelector(),
             }),
             errors=errors
         )
 
-    # ----------------- CONTROLS LIST -----------------
     async def async_step_controls(self, user_input=None):
-        """List controls for current device; allow add/edit/delete/back."""
+        """Manage controls for a device."""
         device = next((d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] == self.current_device_id), {})
         controls = device.get(CONF_CONTROLS, [])
-
+        
         if user_input is not None:
-            action = user_input["action"]
-            if action == "add":
+            if "add" == user_input["action"]:
                 self.current_control_id = None
                 self.control_data = {}
                 return await self.async_step_control()
-            if action == "back":
+            if "back" == user_input["action"]:
                 return await self.async_step_device_menu()
-            # action is control id → control menu
-            self.current_control_id = action
+            
+            self.current_control_id = user_input["action"]
             return await self.async_step_control_menu()
 
         control_map = {c[CONF_ID]: c[CONF_LABEL] for c in controls}
-        options = [{"label": "Add Control", "value": "add"}]
-        options += [{"label": v, "value": k} for k, v in control_map.items()]
-        options += [{"label": "Back", "value": "back"}]
+        options = {"add": "Add a new control", **control_map, "back": "Back"}
 
         return self.async_show_form(
             step_id="controls",
             data_schema=vol.Schema({
-                vol.Required("action"): SelectSelector(SelectSelectorConfig(options=options))
+                vol.Required("action"): vol.In(options)
             })
         )
 
-    # ----------------- CONTROL MENU -----------------
     async def async_step_control_menu(self, user_input=None):
+        """Handle the control menu."""
         if user_input is not None:
-            action = user_input["action"]
-            if action == "edit":
+            if "edit" == user_input["action"]:
                 return await self.async_step_control()
-            if action == "delete":
+            if "delete" == user_input["action"]:
                 devices = self.options.get(CONF_DEVICES, [])
                 for i, d in enumerate(devices):
                     if d[CONF_ID] == self.current_device_id:
@@ -292,26 +141,19 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
                         devices[i][CONF_CONTROLS] = controls
                         break
                 self.options[CONF_DEVICES] = devices
-                # Stay in controls list
                 return await self.async_step_controls()
-            if action == "back":
+            if "back" == user_input["action"]:
                 return await self.async_step_controls()
-
-        options = [
-            {"label": "Edit Control", "value": "edit"},
-            {"label": "Delete Control", "value": "delete"},
-            {"label": "Back", "value": "back"},
-        ]
 
         return self.async_show_form(
             step_id="control_menu",
             data_schema=vol.Schema({
-                vol.Required("action"): SelectSelector(SelectSelectorConfig(options=options))
+                vol.Required("action"): vol.In({"edit": "Edit Control", "delete": "Delete Control", "back": "Back"})
             })
         )
 
-    # ----------------- ADD / EDIT CONTROL -----------------
     async def async_step_control(self, user_input=None):
+        """Handle control add/edit."""
         errors = {}
         if self.current_control_id:
             device = next((d for d in self.options.get(CONF_DEVICES, []) if d[CONF_ID] == self.current_device_id), {})
@@ -324,25 +166,25 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
                 return await self.async_step_control_slider()
             if self.control_data[CONF_TYPE] == "select":
                 return await self.async_step_control_select()
-            # Save simple control and return to controls list
-            return await self._save_control_and_back_to_controls()
+            
+            return await self._save_control()
 
         return self.async_show_form(
             step_id="control",
             data_schema=vol.Schema({
-                vol.Required(CONF_LABEL, default=self.control_data.get(CONF_LABEL, "")): str,
-                vol.Required(CONF_TYPE, default=self.control_data.get(CONF_TYPE, "switch")):
-                    SelectSelector(SelectSelectorConfig(options=CONTROL_TYPES, mode=SelectSelectorMode.DROPDOWN)),
+                vol.Required(CONF_LABEL, default=self.control_data.get(CONF_LABEL, "")): TextSelector(),
+                vol.Required(CONF_TYPE, default=self.control_data.get(CONF_TYPE, "switch") ): SelectSelector(SelectSelectorConfig(options=CONTROL_TYPES, mode=SelectSelectorMode.DROPDOWN)),
                 vol.Required(CONF_ENTITY, default=self.control_data.get(CONF_ENTITY, "")): EntitySelector(),
             }),
             errors=errors
         )
 
     async def async_step_control_slider(self, user_input=None):
+        """Handle slider control options."""
         if user_input is not None:
             self.control_data.update(user_input)
-            return await self._save_control_and_back_to_controls()
-
+            return await self._save_control()
+        
         attributes = ["state"]
         if self.control_data.get(CONF_ENTITY):
             entity = self.hass.states.get(self.control_data[CONF_ENTITY])
@@ -352,151 +194,49 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="control_slider",
             data_schema=vol.Schema({
-                vol.Optional(CONF_MIN, default=self.control_data.get(CONF_MIN, 0)):
-                    NumberSelector(NumberSelectorConfig(min=0, max=1000, step=1)),
-                vol.Optional(CONF_MAX, default=self.control_data.get(CONF_MAX, 100)):
-                    NumberSelector(NumberSelectorConfig(min=0, max=1000, step=1)),
-                vol.Optional(CONF_STEP, default=self.control_data.get(CONF_STEP, 1)):
-                    NumberSelector(NumberSelectorConfig(min=1, max=100, step=1)),
-                vol.Optional(CONF_ATTRIBUTE, default=self.control_data.get(CONF_ATTRIBUTE, "state")):
-                    vol.In(attributes),
+                vol.Optional(CONF_MIN, default=self.control_data.get(CONF_MIN, 0)): NumberSelector(NumberSelectorConfig(min=0, max=1000, step=1, mode="slider")),
+                vol.Optional(CONF_MAX, default=self.control_data.get(CONF_MAX, 100)): NumberSelector(NumberSelectorConfig(min=0, max=1000, step=1, mode="slider")),
+                vol.Optional(CONF_STEP, default=self.control_data.get(CONF_STEP, 1)): NumberSelector(NumberSelectorConfig(min=1, max=100, step=1, mode="slider")),
+                vol.Optional("attribute", default=self.control_data.get("attribute", "state") ): vol.In(attributes),
             })
         )
 
     async def async_step_control_select(self, user_input=None):
+        """Handle select control options."""
         if user_input is not None:
             self.control_data.update(user_input)
-            return await self._save_control_and_back_to_controls()
+            return await self._save_control()
 
         return self.async_show_form(
             step_id="control_select",
             data_schema=vol.Schema({
-                vol.Optional(CONF_OPTIONS, default=self.control_data.get(CONF_OPTIONS, "")): str,
+                vol.Optional(CONF_OPTIONS, default=self.control_data.get(CONF_OPTIONS, "") ): TextSelector(),
             }),
-            description="Enter one option per line (or comma-separated)."
+            description_placeholders={"description": "Enter a comma-separated list of options."}
         )
 
-    # ----------------- HELPERS -----------------
-    async def _save_control_and_back_to_controls(self):
-        """Save/merge current control; do NOT persist entry yet; go back to controls list."""
+    async def _save_control(self):
+        """Save the control data."""
         devices = self.options.get(CONF_DEVICES, [])
         device = next((d for d in devices if d[CONF_ID] == self.current_device_id), None)
         if not device:
-            return await self.async_step_visual()
-
-        # Normalize select options: accept commas, store newline-joined
-        if self.control_data.get(CONF_TYPE) == "select":
-            opts = self.control_data.get(CONF_OPTIONS)
-            if isinstance(opts, str) and "," in opts and "\n" not in opts:
-                opts = "\n".join([o.strip() for o in opts.split(",") if o.strip()])
-            if isinstance(opts, str):
-                self.control_data[CONF_OPTIONS] = opts
+            return self.async_abort(reason="unknown")
+        
+        # Format options for select
+        if self.control_data.get(CONF_TYPE) == "select" and self.control_data.get(CONF_OPTIONS):
+            options_list = [opt.strip() for opt in self.control_data[CONF_OPTIONS].split(",")]
+            self.control_data[CONF_OPTIONS] = "\n".join(options_list)
 
         controls = device.get(CONF_CONTROLS, [])
-        if self.current_control_id:  # edit existing
+        if self.current_control_id: # Edit
             for i, c in enumerate(controls):
                 if c[CONF_ID] == self.current_control_id:
-                    controls[i] = {**c, **self.control_data}
+                    controls[i] = self.control_data
                     break
-        else:  # add new
-            self.control_data.setdefault(CONF_ID, str(uuid.uuid4()))
+        else: # Add
+            self.control_data[CONF_ID] = str(uuid.uuid4())
             controls.append(self.control_data)
-
+        
         device[CONF_CONTROLS] = controls
-        self.options[CONF_DEVICES] = _ensure_ids(devices)
-        return await self.async_step_controls()
-
-    def _sync_raw_from_devices(self):
-        """Regenerate raw YAML and JSON from current devices."""
-        devices = _ensure_ids(self.options.get(CONF_DEVICES, []))
-        try:
-            self.options[CONF_RAW_YAML] = _pretty_yaml(devices)
-        except Exception as e:
-            _LOGGER.debug("YAML dump failed: %s", e)
-            self.options[CONF_RAW_YAML] = "devices: []\n" if not devices else _pretty_json(devices)
-        self.options[CONF_RAW_JSON] = _pretty_json(devices)
-
-    # ----------------- RAW YAML / JSON EDITORS -----------------
-    async def async_step_yaml_editor(self, user_input=None):
-        """Raw YAML editor: validate and SAVE immediately on submit."""
-        errors = {}
-
-        if user_input is not None:
-            action = user_input.get("action")
-            raw_text = user_input.get("yaml_text", "")
-
-            if action == "back":
-                return await self.async_step_init()
-
-            if action == "finish":
-                try:
-                    devices = _parse_raw_to_devices(raw_text)
-                    self.options[CONF_DEVICES] = devices
-                    self._sync_raw_from_devices()
-                    return self.async_create_entry(title="", data=self.options)
-                except Exception as e:
-                    errors["base"] = "invalid"
-                    _LOGGER.error("YAML editor exception: %s", e)
-
-        return self.async_show_form(
-            step_id="yaml_editor",
-            data_schema=vol.Schema({
-                # Corrected: Using TextSelector for multiline editor
-                vol.Required("yaml_text", default=self.options.get(CONF_RAW_YAML, "")): TextSelector(
-                    TextSelectorConfig(multiline=True)
-                ),
-                vol.Required("action", default="finish"): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[
-                            {"label": "Finish", "value": "finish"},
-                            {"label": "Back", "value": "back"},
-                        ],
-                        mode=SelectSelectorMode.DROPDOWN
-                    )
-                )
-            }),
-            errors=errors,
-            description="Edit the YAML configuration. Finish = save."
-        )
-
-    async def async_step_json_editor(self, user_input=None):
-        """Raw JSON editor: validate and SAVE immediately on submit."""
-        errors = {}
-
-        if user_input is not None:
-            action = user_input.get("action")
-            raw_text = user_input.get("json_text", "")
-
-            if action == "back":
-                return await self.async_step_init()
-
-            if action == "finish":
-                try:
-                    devices = _parse_raw_to_devices(raw_text)
-                    self.options[CONF_DEVICES] = devices
-                    self._sync_raw_from_devices()
-                    return self.async_create_entry(title="", data=self.options)
-                except Exception as e:
-                    errors["base"] = "invalid"
-                    _LOGGER.error("JSON editor exception: %s", e)
-
-        return self.async_show_form(
-            step_id="json_editor",
-            data_schema=vol.Schema({
-                # Corrected: Using TextSelector for multiline editor
-                vol.Required("json_text", default=self.options.get(CONF_RAW_JSON, "")): TextSelector(
-                    TextSelectorConfig(multiline=True)
-                ),
-                vol.Required("action", default="finish"): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[
-                            {"label": "Finish", "value": "finish"},
-                            {"label": "Back", "value": "back"},
-                        ],
-                        mode=SelectSelectorMode.DROPDOWN
-                    )
-                )
-            }),
-            errors=errors,
-            description="Edit the JSON configuration. Finish = save."
-        )
+        self.options[CONF_DEVICES] = devices
+        return self.async_create_entry(title="", data=self.options)

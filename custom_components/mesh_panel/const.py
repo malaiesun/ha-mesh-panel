@@ -6,10 +6,6 @@ DOMAIN = "mesh_panel"
 CONF_PANEL_ID = "panel_id"
 CONF_DEVICES = "devices"
 
-# Raw editor keys
-CONF_RAW_YAML = "raw_yaml"
-CONF_RAW_JSON = "raw_json"
-
 # Device keys
 CONF_NAME = "name"
 CONF_ICON = "icon"
@@ -24,12 +20,11 @@ CONF_MIN = "min"
 CONF_MAX = "max"
 CONF_STEP = "step"
 CONF_OPTIONS = "options"
-CONF_ATTRIBUTE = "attribute"
 
 # Control types
 CONTROL_TYPES = [
-    {"value": "switch", "label": "Toggle Switch"},
-    {"value": "slider", "label": "Slider"},
+    {"value": "switch", "label": "Switch (On/Off)"},
+    {"value": "slider", "label": "Slider (Brightness/Volume)"},
     {"value": "color", "label": "Color Wheel"},
     {"value": "select", "label": "Dropdown Selection"},
 ]
