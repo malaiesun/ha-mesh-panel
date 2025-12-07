@@ -324,9 +324,18 @@ class MeshPanelController:
 
         elif ctype == "time":
             try:
-                # State is HH:MM:SS, panel wants HH:MM
-                time_val = state.state.split(":")
-                payload["time"] = f"{time_val[0]}:{time_val[1]}"
+                # State is HH:MM:SS, panel wants HH:MM (rounded)
+                time_parts = state.state.split(":")
+                hour = int(time_parts[0])
+                minute = int(time_parts[1])
+
+                # Round to nearest 5 minutes
+                minute = int(round(minute / 5.0) * 5.0)
+                if minute >= 60:
+                    minute = 0
+                    hour = (hour + 1) % 24
+
+                payload["time"] = f"{hour:02d}:{minute:02d}"
             except:
                 payload["time"] = "00:00"
 
@@ -338,20 +347,24 @@ class MeshPanelController:
     @callback
     def _handle_state_event(self, event):
         """HA entity changed → push update."""
-        new = event.data.get("new_state")
-        if not new:
+        new_state = event.data.get("new_state")
+        if not new_state:
             return
 
         entity_id = event.data["entity_id"]
+        raw_ids_to_update = set()
 
         for dev in self.devices_config:
+            if dev.get("state_entity") == entity_id:
+                raw_ids_to_update.add(entity_id)
+
             for control in dev.get("controls", []):
                 ent = control.get("entity")
                 if not ent:
                     continue
-
                 ha_entity, _ = decode_entity(ent)
                 if ha_entity == entity_id:
-                    self.hass.async_create_task(
-                        self._publish_entity_state(ent)
-                    )
+                    raw_ids_to_update.add(ent)
+
+        for raw_id in raw_ids_to_update:
+            self.hass.async_create_task(self._publish_entity_state(raw_id))
