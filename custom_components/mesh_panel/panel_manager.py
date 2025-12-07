@@ -244,6 +244,12 @@ class MeshPanelController:
                 service = SERVICE_TURN_ON
                 service_data[ATTR_RGB_COLOR] = data["rgb_color"]
 
+            # TIME
+            elif "time" in data:
+                if domain == "input_datetime":
+                    service = "set_datetime"
+                    service_data["time"] = data["time"]
+
             # SELECT
             elif "option" in data:
                 if domain == "media_player":
@@ -312,6 +318,17 @@ class MeshPanelController:
                 payload['rgb_color'] = rgb
             else:
                 payload['rgb_color'] = [0, 0, 0] # Default to black/off
+
+        elif ctype == "text":
+            payload["value"] = state.state
+
+        elif ctype == "time":
+            try:
+                # State is HH:MM:SS, panel wants HH:MM
+                time_val = state.state.split(":")
+                payload["time"] = f"{time_val[0]}:{time_val[1]}"
+            except:
+                payload["time"] = "00:00"
 
         elif ctype == "select":
             payload["option"] = state.state

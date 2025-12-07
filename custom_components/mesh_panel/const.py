@@ -27,6 +27,8 @@ CONTROL_TYPES = [
     {"value": "slider", "label": "Slider (Brightness/Volume)"},
     {"value": "color", "label": "Color Wheel"},
     {"value": "select", "label": "Dropdown Selection"},
+    {"value": "text", "label": "Text Display"},
+    {"value": "time", "label": "Time Input"},
 ]
 
 # MQTT Topics

@@ -33,6 +33,7 @@ from .const import (
     CONF_ID, CONF_NAME, CONF_ICON, CONF_CONTROLS,
     CONF_LABEL, CONF_TYPE, CONF_ENTITY,
     CONF_MIN, CONF_MAX, CONF_STEP, CONF_OPTIONS,
+    CONTROL_TYPES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -385,12 +386,7 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Required(CONF_LABEL, default=self.control_data.get(CONF_LABEL, "")): TextSelector(),
                 vol.Required(CONF_TYPE, default=self.control_data.get(CONF_TYPE, "switch")):
                     SelectSelector(SelectSelectorConfig(
-                        options=[
-                            {"label": "Switch (On/Off)", "value": "switch"},
-                            {"label": "Slider (Numeric)", "value": "slider"},
-                            {"label": "Color Wheel", "value": "color"},
-                            {"label": "Dropdown Selection", "value": "select"},
-                        ],
+                        options=CONTROL_TYPES,
                         mode=SelectSelectorMode.DROPDOWN
                     )),
                 vol.Required(CONF_ENTITY, default=self.control_data.get(CONF_ENTITY, "")): EntitySelector(),
