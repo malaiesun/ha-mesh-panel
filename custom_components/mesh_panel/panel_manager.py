@@ -1,7 +1,4 @@
-"""
-Manages a MESH panel with proper entity/attribute decoding
-and one-by-one live update syncing.
-"""
+#"Manages a MESH panel with proper entity/attribute decoding and one-by-one live update syncing."
 import json
 import logging
 import copy
@@ -15,7 +12,7 @@ from homeassistant.const import (
 )
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
 from homeassistant.helpers.event import async_track_state_change_event
-import homeassistant.util.color as color_util  # Import moved to top
+import homeassistant.util.color as color_util
 
 from .const import *
 
@@ -122,16 +119,20 @@ class MeshPanelController:
 
     def _collect_watched_entities(self):
         """Collect entities to listen for."""
+        _LOGGER.debug("Collecting entities to watch...")
         self._watched.clear()
         for dev in self.devices_config:
             if dev.get("state_entity"):
                 self._watched.add(dev["state_entity"])
+                _LOGGER.debug("... watching device state_entity: %s", dev["state_entity"])
             for control in dev.get("controls", []):
                 ent = control.get("entity")
                 if not ent:
                     continue
                 ha_entity, _ = decode_entity(ent)
                 self._watched.add(ha_entity)
+                _LOGGER.debug("... watching control entity: %s (from %s)", ha_entity, ent)
+        _LOGGER.debug("Finished collecting. Watched set: %s", self._watched)
 
     def _find_control(self, raw_id):
         """Find a control by its EXACT encoded id."""
@@ -294,6 +295,7 @@ class MeshPanelController:
                     _LOGGER.debug("Publishing to %s: %s", self.topic_state, json.dumps(payload))
                     await mqtt.async_publish(self.hass, self.topic_state, json.dumps(payload))
                     return
+            _LOGGER.debug("Could not find control or state_entity for raw_id: %s", raw_id)
             return
 
         ctype = control.get("type")
@@ -303,6 +305,7 @@ class MeshPanelController:
             payload["state"] = state.state
 
         elif ctype == "slider":
+            val = None
             if attribute:
                 val = state.attributes.get(attribute)
             elif domain == "light":
@@ -312,15 +315,13 @@ class MeshPanelController:
 
             try:
                 payload["value"] = int(float(val))
-            except:
+            except (ValueError, TypeError):
                 payload["value"] = 0
 
         elif ctype == "color":
-            rgb = state.attributes.get(ATTR_RGB_COLOR)
-            if rgb:
-                payload['rgb_color'] = rgb
-            else:
-                payload['rgb_color'] = [0, 0, 0] # Default to black/off
+            rgb_tuple = state.attributes.get(ATTR_RGB_COLOR)
+            # Ensure payload is a list, not a tuple, for JSON.
+            payload['rgb_color'] = self._to_rgb_list(rgb_tuple) or [0, 0, 0]
 
         elif ctype == "text":
             payload["value"] = state.state
