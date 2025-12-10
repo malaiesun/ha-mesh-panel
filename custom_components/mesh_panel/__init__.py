@@ -2,12 +2,15 @@
 import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.components import mqtt
 from .const import DOMAIN, CONF_PANEL_ID, CONF_DEVICES, TOPIC_ANNOUNCE
 from .panel_manager import MeshPanelController
 import json
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
 async def async_setup(hass: HomeAssistant, config):
     """Set up the MESH Smart Home Panel integration."""
@@ -36,6 +39,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = ctrl
     
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
 
@@ -44,7 +49,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     ctrl = hass.data[DOMAIN].pop(entry.entry_id, None)
     if ctrl:
         await ctrl.stop()
-    return True
+    
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Reload config entry."""

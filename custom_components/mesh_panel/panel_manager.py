@@ -11,10 +11,12 @@ from homeassistant.const import (
     ATTR_ENTITY_ID
 )
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_RGB_COLOR
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event
 import homeassistant.util.color as color_util
 
 from .const import *
+from .const import SIGNAL_MQTT_PAYLOAD
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -380,7 +382,9 @@ class MeshPanelController:
         elif ctype == "text":
             payload["value"] = state.state
 
-        await mqtt.async_publish(self.hass, self.topic_state, json.dumps(payload))
+        payload_str = json.dumps(payload)
+        async_dispatcher_send(self.hass, SIGNAL_MQTT_PAYLOAD, payload_str)
+        await mqtt.async_publish(self.hass, self.topic_state, payload_str)
 
     @callback
     def _handle_state_event(self, event):
