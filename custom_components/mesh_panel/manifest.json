@@ -12,6 +12,6 @@
   "requirements": [],
   "brand": {
     "name": "MESH Smart Home Panel",
-    "logo": "https://raw.githubusercontent.com/malaiesun/ha-mesh-panel/main/logo.png",
-
+    "logo": "https://raw.githubusercontent.com/malaiesun/ha-mesh-panel/main/logo.png"
+  }
 }
