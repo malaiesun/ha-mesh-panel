@@ -10,7 +10,7 @@ import json
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [Platform.SENSOR]
 
 async def async_setup(hass: HomeAssistant, config):
     """Set up the MESH Smart Home Panel integration."""
