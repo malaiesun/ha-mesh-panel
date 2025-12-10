@@ -396,18 +396,34 @@ class MeshPanelController:
 
         entity_id = event.data["entity_id"]
         raw_ids_to_update = set()
-
+        
+        color_control_found = False
+        # Check if there is a color control for this entity
         for dev in self.devices_config:
-            if dev.get("state_entity") == entity_id:
-                raw_ids_to_update.add(entity_id)
-
             for control in dev.get("controls", []):
                 ent = control.get("entity")
                 if not ent:
                     continue
                 ha_entity, _ = decode_entity(ent)
-                if ha_entity == entity_id:
+                if ha_entity == entity_id and control.get("type") == "color":
                     raw_ids_to_update.add(ent)
+                    color_control_found = True
+                    break
+            if color_control_found:
+                break
+        
+        if not color_control_found:
+            for dev in self.devices_config:
+                if dev.get("state_entity") == entity_id:
+                    raw_ids_to_update.add(entity_id)
+
+                for control in dev.get("controls", []):
+                    ent = control.get("entity")
+                    if not ent:
+                        continue
+                    ha_entity, _ = decode_entity(ent)
+                    if ha_entity == entity_id:
+                        raw_ids_to_update.add(ent)
 
         if raw_ids_to_update:
             for raw_id in raw_ids_to_update:
