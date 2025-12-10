@@ -308,92 +308,90 @@ class MeshPanelController:
         return [255, 255, 255] if state.state == "on" else [0, 0, 0]
 
     async def _publish_entity_state(self, raw_id: str):
-        """Send SEPARATE messages for state/value/rgb_color/etc."""
-
+        """Send ONLY ONE entity update to panel."""
         ha_entity, attribute = decode_entity(raw_id)
         state = self.hass.states.get(ha_entity)
         if not state:
             return
 
-        # 1️⃣ ALWAYS SEND STATE FIRST
-        await mqtt.async_publish(
-            self.hass,
-            self.topic_state,
-            json.dumps({"entity": ha_entity, "state": state.state})
-        )
+        # FIXED: Send "entity" key because C++ code reads doc["entity"]
+        payload = {"entity": raw_id}
+        
+        control = self._find_control(raw_id)
 
-        # 2️⃣ SEND VALUE-TYPE ATTRIBUTES
-        # Brightness
-        if ATTR_BRIGHTNESS in state.attributes:
-            await mqtt.async_publish(
-                self.hass, self.topic_state,
-                json.dumps({"entity": ha_entity, "value": state.attributes[ATTR_BRIGHTNESS]})
-            )
+        # Handle Device State Entity (Header status)
+        if not control:
+            for dev in self.devices_config:
+                if dev.get("state_entity") == raw_id:
+                    payload["state"] = state.state
+                    await mqtt.async_publish(self.hass, self.topic_state, json.dumps(payload))
+                    return
+            return
 
-        # Fan %
-        if "percentage" in state.attributes:
-            await mqtt.async_publish(
-                self.hass, self.topic_state,
-                json.dumps({"entity": ha_entity, "value": state.attributes["percentage"]})
-            )
+        ctype = control.get("type")
+        domain = ha_entity.split(".")[0]
 
-        # Media player volume
-        if "volume_level" in state.attributes:
-            vol = int(state.attributes["volume_level"] * 100)
-            await mqtt.async_publish(
-                self.hass, self.topic_state,
-                json.dumps({"entity": ha_entity, "value": vol})
-            )
+        # --- SWITCH ---
+        if ctype == "switch":
+            payload["state"] = state.state
 
-        # Cover position
-        if "current_position" in state.attributes:
-            await mqtt.async_publish(
-                self.hass, self.topic_state,
-                json.dumps({"entity": ha_entity, "value": state.attributes["current_position"]})
-            )
+        # --- SLIDER ---
+        elif ctype == "slider":
+            val = None
+            if attribute:
+                val = state.attributes.get(attribute)
+            elif domain == "light":
+                val = state.attributes.get(ATTR_BRIGHTNESS)
+            elif domain == "media_player":
+                val = (state.attributes.get("volume_level", 0) * 100)
+            elif domain == "fan":
+                val = state.attributes.get("percentage")
+            elif domain == "climate":
+                val = state.attributes.get("temperature")
+            else:
+                val = state.state
 
-        # 3️⃣ SEND TIME ATTRIBUTE
-        if state.domain == "input_datetime":
             try:
-                t = state.state
+                payload["value"] = int(float(val))
+            except (ValueError, TypeError):
+                payload["value"] = 0
+
+        # --- TIME (Formatted for C++ sscanf %d:%d) ---
+        elif ctype == "time":
+            try:
+                val = state.state.split(":")
+                if len(val) >= 2:
+                    payload["time"] = f"{val[0]}:{val[1]}"
+                else:
+                    payload["time"] = "00:00"
+            except:
+                payload["time"] = "00:00"
+
+        # --- SELECT ---
+        elif ctype == "select":
+            payload["option"] = state.state
+
+        # --- TEXT ---
+        elif ctype == "text":
+            payload["value"] = state.state
+            
+        # --- SEND RGB IN SEPARATE MESSAGE ---
+        if domain == "light":
+            rgb = self._get_active_rgb(state)
+            if rgb:
+                rgb_payload = {
+                    "entity": raw_id,
+                    "rgb_color": rgb
+                }
                 await mqtt.async_publish(
-                    self.hass, self.topic_state,
-                    json.dumps({"entity": ha_entity, "time": t})
+                    self.hass,
+                    self.topic_state,
+                    json.dumps(rgb_payload)
                 )
-            except:
-                pass
-
-        # 4️⃣ SEND OPTION
-        if "options" in state.attributes:
-            await mqtt.async_publish(
-                self.hass, self.topic_state,
-                json.dumps({"entity": ha_entity, "option": state.state})
-            )
-
-        # 5️⃣ SEND RGB COLOR (SEPARATE MESSAGE ALWAYS)
-        rgb = None
-
-        if state.attributes.get(ATTR_RGB_COLOR):
-            rgb = list(state.attributes[ATTR_RGB_COLOR])
-
-        elif state.attributes.get("hs_color"):
-            rgb = color_util.color_hs_to_RGB(*state.attributes["hs_color"])
-
-        elif state.attributes.get("xy_color"):
-            rgb = color_util.color_xy_to_RGB(*state.attributes["xy_color"])
-
-        elif state.attributes.get("color_temp"):
-            try:
-                kelvin = int(1000000 / state.attributes["color_temp"])
-                rgb = color_util.color_temperature_kelvin_to_rgb(kelvin)
-            except:
-                pass
-
-        if rgb:
-            await mqtt.async_publish(
-                self.hass, self.topic_state,
-                json.dumps({"entity": ha_entity, "rgb_color": rgb})
-            )
+            
+        payload_str = json.dumps(payload)
+        async_dispatcher_send(self.hass, SIGNAL_MQTT_PAYLOAD, payload_str)
+        await mqtt.async_publish(self.hass, self.topic_state, payload_str)
 
     @callback
     def _handle_state_event(self, event):
