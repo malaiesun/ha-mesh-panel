@@ -358,6 +358,7 @@ class MeshPanelController:
 
         # --- COLOR ---
         elif ctype == "color":
+            payload["entity"] = ha_entity
             if state.state == "off":
                 payload["rgb_color"] = [0, 0, 0]
             else:
