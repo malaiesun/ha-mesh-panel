@@ -380,15 +380,10 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input:
             self.control_data.update(user_input)
 
-            if self.control_data[CONF_TYPE] == "slider":
-                return await self.async_step_control_slider()
-            if self.control_data[CONF_TYPE] == "select":
-                return await self.async_step_control_select()
-            if self.control_data[CONF_TYPE] == "button_grid":
+            if self.control_data.get(CONF_TYPE) == "button_grid":
                 return await self.async_step_control_grid()
-
-            await self._save_control(stay_in_flow=True)
-            return await self.async_step_controls()
+            
+            return await self.async_step_control_entity()
 
         return self.async_show_form(
             step_id="control",
@@ -399,7 +394,27 @@ class MeshPanelOptionsFlowHandler(config_entries.OptionsFlow):
                         options=CONTROL_TYPES,
                         mode=SelectSelectorMode.DROPDOWN
                     )),
-                vol.Optional(CONF_ENTITY, default=self.control_data.get(CONF_ENTITY, "")): EntitySelector(),
+            })
+        )
+
+
+    async def async_step_control_entity(self, user_input=None):
+        """Handle entity selection for a control."""
+        if user_input:
+            self.control_data.update(user_input)
+
+            if self.control_data[CONF_TYPE] == "slider":
+                return await self.async_step_control_slider()
+            if self.control_data[CONF_TYPE] == "select":
+                return await self.async_step_control_select()
+
+            await self._save_control(stay_in_flow=True)
+            return await self.async_step_controls()
+
+        return self.async_show_form(
+            step_id="control_entity",
+            data_schema=vol.Schema({
+                vol.Required(CONF_ENTITY, default=self.control_data.get(CONF_ENTITY, "")): EntitySelector(),
             })
         )
 
